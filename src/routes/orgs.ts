@@ -40,7 +40,7 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
         eventType: 'ALLOCATION_ADJUST',
         orgId: org.id,
         amount,
-        balanceAfter: amount, // Approximated. Real balance will be set in redis
+        balanceAfter: amount, // TODO(#13): Approximated (assumes 0 reserved). Reconciliation worker (Phase 3) will detect and correct if needed.
       });
     });
 
