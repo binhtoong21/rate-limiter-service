@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.yaml
+
+language: vi
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  collapse_walkthrough: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "src/redis/scripts/**/*.lua"
+      instructions: |
+        Review Lua scripts for atomicity. All multi-command Redis operations
+        MUST be in Lua scripts (no MULTI/EXEC). Verify that:
+        - Scripts use KEYS[] and ARGV[] properly (no hardcoded key names)
+        - All numeric comparisons use tonumber()
+        - Error conditions return meaningful error codes
+        - Scripts are loaded via SCRIPT LOAD / EVALSHA, never raw EVAL
+
+    - path: "src/services/**"
+      instructions: |
+        Verify dual-write contract: PostgreSQL INSERT must happen BEFORE
+        Redis Lua script execution. The order is:
+        1. INSERT quota_events into PostgreSQL (COMMIT first)
+        2. Run Redis Lua script
+        3. If Lua fails → INSERT *_FAILED event into PostgreSQL
+        Never write to Redis before PostgreSQL. PostgreSQL is ground truth.
+
+    - path: "src/routes/**"
+      instructions: |
+        Check that mutation endpoints creating quota_events require
+        X-Idempotency-Key header. Verify API response format:
+        - Success: { data: {}, message?: string }
+        - Error: { error: "SCREAMING_SNAKE_CASE", message: string }
+
+    - path: "src/workers/**"
+      instructions: |
+        Workers must be idempotent and cron-based (BullMQ).
+        Verify settle flow order: Update PG status → Insert quota_event → Update Redis.
+        Workers must handle partial failure gracefully.
+
+    - path: "src/db/schema.ts"
+      instructions: |
+        Drizzle ORM schema. Verify:
+        - quota_events table is append-only (no UPDATE/DELETE operations anywhere)
+        - Enum values are only ADDED, never REMOVED
+        - CHECK constraints on amount > 0 and balance_after >= 0
+chat:
+  auto_reply: true
