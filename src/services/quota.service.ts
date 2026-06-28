@@ -177,7 +177,7 @@ export class QuotaService {
     }
 
     if (existingLease.status !== 'active') {
-      return existingLease; // Will handle 409 in route
+      throw new Error('LEASE_ALREADY_RELEASED');
     }
 
     // Step 2: Tính balance_after (best-effort)

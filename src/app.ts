@@ -4,6 +4,10 @@ import { luaScriptsPlugin } from './plugins/lua-scripts';
 import { rateLimitPlugin } from './plugins/rate-limit';
 import systemRoutes from './routes/system';
 import devBootstrapRoutes from './routes/dev/bootstrap';
+import orgsRoutes from './routes/orgs';
+import poolRoutes from './routes/quota/pool';
+import leasesRoutes from './routes/quota/leases';
+import eventsRoutes from './routes/quota/events';
 
 export function buildApp(opts = {}): FastifyInstance {
   const app = fastify({
@@ -24,6 +28,10 @@ export function buildApp(opts = {}): FastifyInstance {
 
   // Register Routes
   app.register(systemRoutes);
+  app.register(orgsRoutes);
+  app.register(poolRoutes, { prefix: '/quota' });
+  app.register(leasesRoutes, { prefix: '/quota' });
+  app.register(eventsRoutes, { prefix: '/quota' });
   
   if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
     app.register(devBootstrapRoutes, { prefix: '/dev' });
