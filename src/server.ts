@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { buildApp } from './app';
+import './workers';
 
 const start = async () => {
   const app = buildApp();
