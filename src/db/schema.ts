@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp, boolean, integer, pgEnum, bigint, jsonb, index } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, timestamp, boolean, integer, pgEnum, bigint, jsonb, index, check } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 export const organizations = pgTable("organizations", {
@@ -56,6 +56,7 @@ export const leases = pgTable("leases", {
   return {
     activeByServiceIdx: index("idx_leases_active_by_service").on(table.serviceId, table.expiresAt).where(sql`${table.status} = 'active'`),
     expiryScanIdx: index("idx_leases_expiry_scan").on(table.expiresAt).where(sql`${table.status} = 'active'`),
+    amountPositiveCheck: check('leases_amount_check', sql`${table.amount} > 0`),
   };
 });
 
@@ -75,5 +76,7 @@ export const quotaEvents = pgTable("quota_events", {
 }, (table) => {
   return {
     orgTimeIdx: index("idx_quota_events_org_time").on(table.orgId, table.createdAt.desc()),
+    amountPositiveCheck: check('quota_events_amount_check', sql`${table.amount} > 0`),
+    balanceNonNegativeCheck: check('quota_events_balance_check', sql`${table.balanceAfter} >= 0`),
   };
 });

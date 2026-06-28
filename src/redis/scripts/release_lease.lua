@@ -5,14 +5,13 @@ local lease_hash       = KEYS[3]
 local lease_active_set = KEYS[4]
 
 local lease_id = ARGV[1]
+local amount   = tonumber(ARGV[2])
 
--- Idempotency guard: nếu lease_hash không tồn tại → đã được release trước đó
-if redis.call('EXISTS', lease_hash) == 0 then
-  return redis.status_reply('OK')
+if redis.call('SISMEMBER', lease_active_set, lease_id) == 0 then
+  if redis.call('EXISTS', lease_hash) == 0 then
+    return redis.status_reply('OK')
+  end
 end
-
--- Đọc amount từ lease hash
-local amount = tonumber(redis.call('HGET', lease_hash, 'amount'))
 
 -- Return quota về pool
 redis.call('INCRBY', pool_available, amount)

@@ -7,15 +7,27 @@ export class IdempotencyService {
   /**
    * Check if an operation has already been executed.
    */
-  async check(key: string): Promise<{ exists: boolean; cachedResult?: any }> {
-    const cachedEventId = await redis.get(`idem:${key}`);
+  async check(key: string, expectedFingerprint?: string): Promise<{ exists: boolean; cachedResult?: any }> {
+    const cachedData = await redis.get(`idem:${key}`);
     
-    if (cachedEventId) {
+    if (cachedData) {
+      let eventId = cachedData;
+      
+      if (cachedData.includes(':')) {
+        const parts = cachedData.split(':');
+        eventId = parts[0];
+        const cachedFingerprint = parts[1];
+        
+        if (expectedFingerprint && cachedFingerprint !== expectedFingerprint) {
+          throw new Error('DUPLICATE_IDEMPOTENCY_KEY');
+        }
+      }
+      
       // Event exists in Redis, fetch from PG
       const [event] = await db
         .select()
         .from(quotaEvents)
-        .where(eq(quotaEvents.id, cachedEventId))
+        .where(eq(quotaEvents.id, eventId))
         .limit(1);
         
       if (event) {
@@ -29,9 +41,10 @@ export class IdempotencyService {
   /**
    * Mark an operation as completed by storing the event ID.
    */
-  async mark(key: string, eventId: string): Promise<void> {
+  async mark(key: string, eventId: string, fingerprint?: string): Promise<void> {
+    const value = fingerprint ? `${eventId}:${fingerprint}` : eventId;
     // Set idempotency key with 24 hours TTL
-    await redis.set(`idem:${key}`, eventId, 'EX', 86400);
+    await redis.set(`idem:${key}`, value, 'EX', 86400);
   }
 
   /**

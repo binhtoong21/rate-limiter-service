@@ -21,7 +21,8 @@ declare module 'ioredis' {
       poolReservedKey: string,
       leaseHashKey: string,
       leaseActiveSetKey: string,
-      leaseId: string
+      leaseId: string,
+      amount: string
     ): Promise<string>;
     
     getEffectiveLimit(

@@ -8,7 +8,7 @@ import { redis as defaultRedis } from '../redis';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
-export const startLeaseExpiryWorker = () => {
+export const startLeaseExpiryWorker = async () => {
   // BullMQ requires maxRetriesPerRequest: null
   const connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
     maxRetriesPerRequest: null,
@@ -68,7 +68,8 @@ export const startLeaseExpiryWorker = () => {
           `quota:pool:${lease.orgId}:reserved`,
           `quota:lease:${lease.id}`,
           `quota:lease:active:${lease.orgId}`,
-          lease.id
+          lease.id,
+          lease.amount.toString()
         );
       });
       processed++;
@@ -89,7 +90,7 @@ export const startLeaseExpiryWorker = () => {
   });
 
   // Setup repeatable job every 30 seconds
-  leaseExpiryQueue.add('scan-expired', {}, {
+  await leaseExpiryQueue.add('scan-expired', {}, {
     repeat: {
       every: 30000,
     }

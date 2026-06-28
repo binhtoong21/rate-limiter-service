@@ -3,11 +3,13 @@ import { db } from '../db';
 import { organizations, quotaEvents } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { redis } from '../redis';
+import { idempotencyService } from '../services/idempotency.service';
 
 const orgsRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.patch<{
     Params: { slug: string };
     Body: { amount: number };
+    Headers: { 'x-idempotency-key'?: string };
   }>('/:slug/quota', async (request, reply) => {
     // Admin only guard
     if (!request.auth.isAdmin) {
@@ -21,28 +23,66 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'BAD_REQUEST', message: 'Amount must be a non-negative number' });
     }
 
+    const idempotencyKey = request.headers['x-idempotency-key'] as string | undefined;
+
     // Find org by slug
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
     if (!org) {
       return reply.status(404).send({ error: 'NOT_FOUND', message: 'Organization not found' });
     }
 
+    let fingerprint: string | undefined;
+    if (idempotencyKey) {
+      fingerprint = `${org.id}:${amount}:ALLOCATION_ADJUST`;
+      try {
+        const { exists, cachedResult } = await idempotencyService.check(idempotencyKey, fingerprint);
+        if (exists) {
+          // If already adjusted, we return the cached pool data but we must read the live available amount
+          // because it might have changed since the event.
+          // However, for pure idempotency, returning the total from the cached event is correct.
+          const currentAvailable = await redis.get(`quota:pool:${org.id}:available`);
+          return reply.send({ data: { quotaAllocated: cachedResult.amount, available: parseInt(currentAvailable || '0', 10) } });
+        }
+      } catch (err: any) {
+        if (err.message === 'DUPLICATE_IDEMPOTENCY_KEY') {
+          return reply.status(409).send({ error: 'DUPLICATE_IDEMPOTENCY_KEY', message: 'Idempotency key already used for a different request' });
+        }
+        throw err;
+      }
+    }
+
+    const reservedRaw = await redis.get(`quota:pool:${org.id}:reserved`);
+    const reserved = parseInt(reservedRaw || '0', 10);
+    const balanceAfterEstimate = amount - reserved;
+
     let returnedAmount: string = "0";
+    let eventRecordId: string | undefined;
 
-    await db.transaction(async (tx) => {
-      // 1. Update PG quotaAllocated
-      await tx.update(organizations)
-        .set({ quotaAllocated: amount })
-        .where(eq(organizations.id, org.id));
+    try {
+      await db.transaction(async (tx) => {
+        // 1. Update PG quotaAllocated
+        await tx.update(organizations)
+          .set({ quotaAllocated: amount })
+          .where(eq(organizations.id, org.id));
 
-      // 2. Insert event
-      await tx.insert(quotaEvents).values({
-        eventType: 'ALLOCATION_ADJUST',
-        orgId: org.id,
-        amount,
-        balanceAfter: amount, // TODO(#13): Approximated (assumes 0 reserved). Reconciliation worker (Phase 3) will detect and correct if needed.
+        // 2. Insert event
+        const [evt] = await tx.insert(quotaEvents).values({
+          eventType: 'ALLOCATION_ADJUST',
+          orgId: org.id,
+          amount,
+          balanceAfter: balanceAfterEstimate, // Best-effort estimate: reserved read before setQuotaPool call
+          idempotencyKey,
+        }).returning({ id: quotaEvents.id });
+        eventRecordId = evt.id;
       });
-    });
+    } catch (err: any) {
+      if (err.code === '23505' && idempotencyKey) {
+        const event = await idempotencyService.handleUniqueViolation(idempotencyKey);
+        const currentAvailable = await redis.get(`quota:pool:${org.id}:available`);
+        return reply.send({ data: { quotaAllocated: event.amount, available: parseInt(currentAvailable || '0', 10) } });
+      }
+      throw err;
+    }
 
     // 3. Redis Lua to update pool atomically (total & available)
     // Execute after PG commit so we don't end up with Redis updated but PG rollbacked
@@ -52,6 +92,10 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
       `quota:pool:${org.id}:reserved`,
       amount.toString()
     );
+
+    if (idempotencyKey && eventRecordId) {
+      await idempotencyService.mark(idempotencyKey, eventRecordId, fingerprint);
+    }
 
     return reply.send({ data: { quotaAllocated: amount, available: parseInt(returnedAmount, 10) } });
   });

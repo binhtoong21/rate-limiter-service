@@ -7,8 +7,15 @@ local pool_available = KEYS[2]
 local pool_reserved = KEYS[3]
 local new_total = tonumber(ARGV[1])
 
--- Read current reserved (default 0)
 local reserved = tonumber(redis.call('GET', pool_reserved) or '0')
+
+if not new_total or new_total < 0 then
+  return redis.error_reply('INVALID_TOTAL')
+end
+
+if new_total < reserved then
+  return redis.error_reply('RESERVED_EXCEEDS_TOTAL')
+end
 
 -- Compute new available
 local new_available = new_total - reserved

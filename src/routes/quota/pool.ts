@@ -12,7 +12,12 @@ const poolRoutes: FastifyPluginAsync = async (fastify) => {
     pipeline.get(`quota:pool:${orgId}:received`);
     pipeline.get(`quota:pool:${orgId}:available`);
 
-    const results = await pipeline.exec();
+    let results;
+    try {
+      results = await pipeline.exec();
+    } catch (err) {
+      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis system failure' });
+    }
     
     if (!results) {
       return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis pipeline failed' });

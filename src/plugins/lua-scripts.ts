@@ -5,34 +5,44 @@ import { redis } from '../redis';
 
 // Types for loaded scripts already defined in ioredis module declaration
 
+const scriptShas: Record<string, string> = {};
+const scriptContents: Record<string, string> = {};
+
+// Helper to evaluate Lua script with NOSCRIPT retry
+async function evalShaWithRetry(
+  commandName: string,
+  numberOfKeys: number,
+  ...args: (string | number)[]
+) {
+  try {
+    return await redis.evalsha(scriptShas[commandName], numberOfKeys, ...args);
+  } catch (err: any) {
+    if (err.message && err.message.includes('NOSCRIPT')) {
+      const sha = await redis.script('LOAD', scriptContents[commandName]) as string;
+      scriptShas[commandName] = sha;
+      return await redis.evalsha(sha, numberOfKeys, ...args);
+    }
+    throw err;
+  }
+}
+
 export const luaScriptsPlugin = fp(async (fastify, opts) => {
   const scriptsDir = path.resolve(process.cwd(), 'src/redis/scripts');
 
-  const claimLeaseScript = fs.readFileSync(path.join(scriptsDir, 'claim_lease.lua'), 'utf8');
-  const releaseLeaseScript = fs.readFileSync(path.join(scriptsDir, 'release_lease.lua'), 'utf8');
-  const getEffectiveLimitScript = fs.readFileSync(path.join(scriptsDir, 'get_effective_limit.lua'), 'utf8');
-  const setQuotaPoolScript = fs.readFileSync(path.join(scriptsDir, 'set_quota_pool.lua'), 'utf8');
+  scriptContents['claimLease'] = fs.readFileSync(path.join(scriptsDir, 'claim_lease.lua'), 'utf8');
+  scriptContents['releaseLease'] = fs.readFileSync(path.join(scriptsDir, 'release_lease.lua'), 'utf8');
+  scriptContents['getEffectiveLimit'] = fs.readFileSync(path.join(scriptsDir, 'get_effective_limit.lua'), 'utf8');
+  scriptContents['setQuotaPool'] = fs.readFileSync(path.join(scriptsDir, 'set_quota_pool.lua'), 'utf8');
 
-  // Define commands on Redis instance
-  redis.defineCommand('claimLease', {
-    numberOfKeys: 4,
-    lua: claimLeaseScript,
-  });
+  for (const cmd in scriptContents) {
+    scriptShas[cmd] = await redis.script('LOAD', scriptContents[cmd]) as string;
+  }
 
-  redis.defineCommand('releaseLease', {
-    numberOfKeys: 4,
-    lua: releaseLeaseScript,
-  });
+  // Attach wrappers directly to the redis instance
+  (redis as any).claimLease = (...args: any[]) => evalShaWithRetry('claimLease', 4, ...args);
+  (redis as any).releaseLease = (...args: any[]) => evalShaWithRetry('releaseLease', 4, ...args);
+  (redis as any).getEffectiveLimit = (...args: any[]) => evalShaWithRetry('getEffectiveLimit', 1, ...args);
+  (redis as any).setQuotaPool = (...args: any[]) => evalShaWithRetry('setQuotaPool', 3, ...args);
 
-  redis.defineCommand('getEffectiveLimit', {
-    numberOfKeys: 1,
-    lua: getEffectiveLimitScript,
-  });
-
-  redis.defineCommand('setQuotaPool', {
-    numberOfKeys: 3,
-    lua: setQuotaPoolScript,
-  });
-
-  fastify.log.info('Lua scripts loaded successfully');
+  fastify.log.info('Lua scripts loaded successfully via SCRIPT LOAD');
 });

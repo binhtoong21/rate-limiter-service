@@ -10,7 +10,7 @@ const start = async () => {
     app.log.info(`Server listening at http://0.0.0.0:${process.env.PORT || 3000}`);
     
     // Start background workers only after app is successfully listening
-    startWorkers();
+    await startWorkers();
   } catch (err) {
     app.log.error(err);
     process.exit(1);

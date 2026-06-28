@@ -73,12 +73,19 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
         reply.header('X-Limiter-Fallback', 'fail-open');
         // Let it pass through
         return;
+      } else if (failOpen === false) {
+        reply.header('X-Limiter-Fallback', 'fail-closed');
+        reply.header('Retry-After', 30);
+        return reply.status(429).send({
+          error: 'Too Many Requests',
+          message: 'Rate limiter degraded and organization is fail-closed',
+        });
       } else {
         reply.header('X-Limiter-Fallback', 'fail-closed');
         reply.header('Retry-After', 30);
         return reply.status(503).send({
           error: 'Service Unavailable',
-          message: 'Rate limiter degraded and organization is fail-closed',
+          message: 'Rate limiter degraded and org config is unknown',
         });
       }
     }

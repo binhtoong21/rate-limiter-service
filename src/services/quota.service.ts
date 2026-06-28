@@ -31,8 +31,17 @@ export class QuotaService {
   }): Promise<typeof leases.$inferSelect> {
     const { orgId, serviceId, amount, ttlSeconds, idempotencyKey } = params;
 
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      throw new Error('amount must be a positive integer');
+    }
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0) {
+      throw new Error('ttlSeconds must be a positive integer');
+    }
+
+    const fingerprint = `${orgId}:${serviceId}:${amount}:CLAIM`;
+
     // Step 1: Idempotency check (Redis)
-    const { exists, cachedResult } = await idempotencyService.check(idempotencyKey);
+    const { exists, cachedResult } = await idempotencyService.check(idempotencyKey, fingerprint);
     if (exists && cachedResult) {
       // If we got a hit in Redis, return the cached result.
       // We need to fetch the actual lease object since the event just has the ID.
@@ -154,7 +163,7 @@ export class QuotaService {
 
     // Step 4: Set idempotency key
     if (createdEventId) {
-      await idempotencyService.mark(idempotencyKey, createdEventId);
+      await idempotencyService.mark(idempotencyKey, createdEventId, fingerprint);
     }
 
     return returnedLease!;
@@ -221,7 +230,8 @@ export class QuotaService {
         `quota:pool:${existingLease.orgId}:reserved`,
         `quota:lease:${leaseId}`,
         `quota:lease:active:${existingLease.orgId}`,
-        leaseId
+        leaseId,
+        existingLease.amount.toString()
       );
     });
 

@@ -19,12 +19,12 @@ const leasesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(400).send({ error: 'BAD_REQUEST', message: 'Missing X-Idempotency-Key header' });
     }
 
-    if (typeof amount !== 'number' || amount <= 0) {
-      return reply.status(400).send({ error: 'BAD_REQUEST', message: 'amount must be > 0' });
+    if (!Number.isSafeInteger(amount) || amount <= 0) {
+      return reply.status(400).send({ error: 'BAD_REQUEST', message: 'amount must be a positive integer' });
     }
 
-    if (typeof ttlSeconds !== 'number' || ttlSeconds <= 0) {
-      return reply.status(400).send({ error: 'BAD_REQUEST', message: 'ttlSeconds must be > 0' });
+    if (!Number.isSafeInteger(ttlSeconds) || ttlSeconds <= 0) {
+      return reply.status(400).send({ error: 'BAD_REQUEST', message: 'ttlSeconds must be a positive integer' });
     }
 
     try {

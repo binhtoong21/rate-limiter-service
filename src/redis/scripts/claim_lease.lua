@@ -11,6 +11,14 @@ local amount      = tonumber(ARGV[4])
 local expires_at  = ARGV[5]
 local ttl         = tonumber(ARGV[6])
 
+if not amount or amount <= 0 then
+  return redis.error_reply('INVALID_AMOUNT')
+end
+
+if not ttl or ttl <= 0 then
+  return redis.error_reply('INVALID_TTL')
+end
+
 -- Guard: check available balance
 local available = tonumber(redis.call('GET', pool_available) or '0')
 if available < amount then
