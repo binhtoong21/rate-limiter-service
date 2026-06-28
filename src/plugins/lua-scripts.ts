@@ -3,16 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { redis } from '../redis';
 
-declare module 'fastify' {
-  interface FastifyInstance {
-    luaScripts: {
-      claimLeaseSha: string;
-      releaseLeaseSha: string;
-      getEffectiveLimitSha: string;
-      setQuotaPoolSha: string;
-    };
-  }
-}
+// Types for loaded scripts already defined in ioredis module declaration
 
 export const luaScriptsPlugin = fp(async (fastify, opts) => {
   const scriptsDir = path.resolve(process.cwd(), 'src/redis/scripts');
@@ -41,20 +32,6 @@ export const luaScriptsPlugin = fp(async (fastify, opts) => {
   redis.defineCommand('setQuotaPool', {
     numberOfKeys: 3,
     lua: setQuotaPoolScript,
-  });
-
-  // Also load them explicitly to get the SHA for manual evaluation if needed
-  // Note: ioredis handles script loading automatically when using the defined commands
-  const claimLeaseSha = await redis.script('LOAD', claimLeaseScript) as string;
-  const releaseLeaseSha = await redis.script('LOAD', releaseLeaseScript) as string;
-  const getEffectiveLimitSha = await redis.script('LOAD', getEffectiveLimitScript) as string;
-  const setQuotaPoolSha = await redis.script('LOAD', setQuotaPoolScript) as string;
-
-  fastify.decorate('luaScripts', {
-    claimLeaseSha,
-    releaseLeaseSha,
-    getEffectiveLimitSha,
-    setQuotaPoolSha,
   });
 
   fastify.log.info('Lua scripts loaded successfully');

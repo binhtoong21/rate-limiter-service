@@ -11,6 +11,10 @@ if #lease_ids == 0 then return default_limit end
 local total = 0
 for _, lease_id in ipairs(lease_ids) do
   local amount = redis.call('HGET', 'quota:lease:' .. lease_id, 'amount')
-  if amount then total = total + tonumber(amount) end
+  if amount then 
+    total = total + tonumber(amount) 
+  else
+    redis.call('SREM', lease_active_set, lease_id)
+  end
 end
 return total

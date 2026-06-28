@@ -1,1 +1,5 @@
-export * from './lease-expiry.worker';
+import { startLeaseExpiryWorker } from './lease-expiry.worker';
+
+export const startWorkers = () => {
+  startLeaseExpiryWorker();
+};

@@ -41,8 +41,12 @@ export const quotaEventTypeEnum = pgEnum('quota_event_type', [
 
 export const leases = pgTable("leases", {
   id: uuid("id").primaryKey().defaultRandom(),
-  orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: 'cascade' }),
-  serviceId: uuid("service_id").notNull().references(() => services.id, { onDelete: 'cascade' }),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'restrict' }),
+  serviceId: uuid('service_id')
+    .notNull()
+    .references(() => services.id, { onDelete: 'restrict' }),
   amount: bigint("amount", { mode: 'number' }).notNull(),
   status: leaseStatusEnum("status").notNull().default('active'),
   claimedAt: timestamp("claimed_at", { withTimezone: true, mode: 'string' }).notNull().defaultNow(),

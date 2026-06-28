@@ -39,7 +39,7 @@ const leasesRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.status(201).send({ data: lease });
     } catch (err: any) {
       if (err instanceof InsufficientQuotaError) {
-        return reply.status(402).send({ error: 'INSUFFICIENT_QUOTA', message: 'Not enough quota available' });
+        return reply.status(422).send({ error: 'INSUFFICIENT_QUOTA', message: 'Not enough quota available' });
       }
       throw err;
     }
@@ -57,18 +57,6 @@ const leasesRoutes: FastifyPluginAsync = async (fastify) => {
         serviceId,
       });
 
-      // Issue #4 Fix & Design Plan logic:
-      // If we returned successfully but the returned lease status is NOT active (i.e. we didn't just release it now)
-      // wait, in quotaService.releaseLease, if it's not active, it returns existingLease without updating
-      // We should check if existingLease.status !== 'active' from the returned object?
-      // Actually, if it was already released/expired, returning 409 LEASE_ALREADY_RELEASED is requested.
-      // But we just returned the lease from releaseLease. Wait, in quotaService, if existing.status !== 'active', it returns existing.
-      // Let's modify the check: if the lease we got back has status !== 'active', wait, what if it WAS active and we JUST updated it to 'released'?
-      // In that case, the returned lease from UPDATE will have status = 'released'.
-      // So we can't just check `lease.status`. We need `releaseLease` to indicate if it was actually released or already released.
-      // Or we can check if `lease.releasedAt` is old? No, `releaseLease` can throw `ALREADY_RELEASED`.
-      // Let's rely on quotaService throwing an error. I'll need to update quota.service.ts to throw a specific error instead of returning existingLease.
-      
       return reply.send({ data: lease });
     } catch (err: any) {
       if (err instanceof NotFoundError) {

@@ -35,22 +35,23 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
         .set({ quotaAllocated: amount })
         .where(eq(organizations.id, org.id));
 
-      // 2. Redis Lua to update pool atomically (total & available)
-      returnedAmount = await redis.setQuotaPool(
-        `quota:pool:${org.id}:total`,
-        `quota:pool:${org.id}:available`,
-        `quota:pool:${org.id}:reserved`,
-        amount.toString()
-      );
-
-      // 3. Insert event
+      // 2. Insert event
       await tx.insert(quotaEvents).values({
         eventType: 'ALLOCATION_ADJUST',
         orgId: org.id,
         amount,
-        balanceAfter: parseInt(returnedAmount, 10),
+        balanceAfter: amount, // Approximated. Real balance will be set in redis
       });
     });
+
+    // 3. Redis Lua to update pool atomically (total & available)
+    // Execute after PG commit so we don't end up with Redis updated but PG rollbacked
+    returnedAmount = await redis.setQuotaPool(
+      `quota:pool:${org.id}:total`,
+      `quota:pool:${org.id}:available`,
+      `quota:pool:${org.id}:reserved`,
+      amount.toString()
+    );
 
     return reply.send({ data: { quotaAllocated: amount, available: parseInt(returnedAmount, 10) } });
   });

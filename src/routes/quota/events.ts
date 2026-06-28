@@ -11,7 +11,7 @@ const eventsRoutes: FastifyPluginAsync = async (fastify) => {
 
     const { orgId } = request.auth;
 
-    // TODO: implement cursor pagination. Currently just returning latest 100
+    // TODO(#12): implement cursor pagination. Currently just returning latest 100 for simplicity in Phase 2
     const events = await db
       .select()
       .from(quotaEvents)

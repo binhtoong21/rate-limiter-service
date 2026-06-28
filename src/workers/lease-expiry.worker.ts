@@ -8,14 +8,15 @@ import { redis as defaultRedis } from '../redis';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
-// BullMQ requires maxRetriesPerRequest: null
-const connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-  maxRetriesPerRequest: null,
-});
+export const startLeaseExpiryWorker = () => {
+  // BullMQ requires maxRetriesPerRequest: null
+  const connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+    maxRetriesPerRequest: null,
+  });
 
-export const leaseExpiryQueue = new Queue('lease-expiry', { connection: connection as any });
+  const leaseExpiryQueue = new Queue('lease-expiry', { connection: connection as any });
 
-export const leaseExpiryWorker = new Worker('lease-expiry', async (job) => {
+  const leaseExpiryWorker = new Worker('lease-expiry', async (job) => {
   // 1. SELECT expired leases (status='active' AND expires_at < NOW()) LIMIT 100
   const expiredLeases = await db
     .select()
@@ -69,9 +70,8 @@ export const leaseExpiryWorker = new Worker('lease-expiry', async (job) => {
           `quota:lease:active:${lease.orgId}`,
           lease.id
         );
-
-        processed++;
       });
+      processed++;
     } catch (err) {
       logger.error({ err, leaseId: lease.id }, 'Failed to process expired lease');
     }
@@ -84,13 +84,14 @@ export const leaseExpiryWorker = new Worker('lease-expiry', async (job) => {
   return { processed };
 }, { connection: connection as any });
 
-leaseExpiryWorker.on('failed', (job, err) => {
-  logger.error({ err, jobId: job?.id }, 'Lease expiry job failed');
-});
+  leaseExpiryWorker.on('failed', (job, err) => {
+    logger.error({ err, jobId: job?.id }, 'Lease expiry job failed');
+  });
 
-// Setup repeatable job every 30 seconds
-leaseExpiryQueue.add('scan-expired', {}, {
-  repeat: {
-    every: 30000,
-  }
-});
+  // Setup repeatable job every 30 seconds
+  leaseExpiryQueue.add('scan-expired', {}, {
+    repeat: {
+      every: 30000,
+    }
+  });
+};

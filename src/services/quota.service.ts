@@ -46,6 +46,7 @@ export class QuotaService {
           return existingLease;
         }
       }
+      throw new Error('Idempotency collision but lease not found');
     }
 
     // Step 2: Tính balance_after (best-effort estimate)

@@ -28,7 +28,7 @@ export function buildApp(opts = {}): FastifyInstance {
 
   // Register Routes
   app.register(systemRoutes);
-  app.register(orgsRoutes);
+  app.register(orgsRoutes, { prefix: '/orgs' });
   app.register(poolRoutes, { prefix: '/quota' });
   app.register(leasesRoutes, { prefix: '/quota' });
   app.register(eventsRoutes, { prefix: '/quota' });
