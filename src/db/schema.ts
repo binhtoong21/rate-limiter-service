@@ -63,10 +63,10 @@ export const leases = pgTable("leases", {
 export const quotaEvents = pgTable("quota_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   eventType: quotaEventTypeEnum("event_type").notNull(),
-  orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: 'cascade' }),
-  counterpartOrgId: uuid("counterpart_org_id").references(() => organizations.id, { onDelete: 'set null' }),
-  serviceId: uuid("service_id").references(() => services.id, { onDelete: 'set null' }),
-  leaseId: uuid("lease_id").references(() => leases.id, { onDelete: 'set null' }),
+  orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  counterpartOrgId: uuid("counterpart_org_id").references(() => organizations.id, { onDelete: 'restrict' }),
+  serviceId: uuid("service_id").references(() => services.id, { onDelete: 'restrict' }),
+  leaseId: uuid("lease_id").references(() => leases.id, { onDelete: 'restrict' }),
   loanId: uuid("loan_id"), // FK to loans table (to be created in Phase 3)
   amount: bigint("amount", { mode: 'number' }).notNull(),
   balanceAfter: bigint("balance_after", { mode: 'number' }).notNull(),

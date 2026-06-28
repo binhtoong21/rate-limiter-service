@@ -13,10 +13,10 @@ export class IdempotencyService {
     if (cachedData) {
       let eventId = cachedData;
       
-      if (cachedData.includes(':')) {
-        const parts = cachedData.split(':');
-        eventId = parts[0];
-        const cachedFingerprint = parts[1];
+      if (cachedData.includes('|')) {
+        const separatorIdx = cachedData.indexOf('|');
+        eventId = cachedData.substring(0, separatorIdx);
+        const cachedFingerprint = cachedData.substring(separatorIdx + 1);
         
         if (expectedFingerprint && cachedFingerprint !== expectedFingerprint) {
           throw new Error('DUPLICATE_IDEMPOTENCY_KEY');
@@ -42,7 +42,7 @@ export class IdempotencyService {
    * Mark an operation as completed by storing the event ID.
    */
   async mark(key: string, eventId: string, fingerprint?: string): Promise<void> {
-    const value = fingerprint ? `${eventId}:${fingerprint}` : eventId;
+    const value = fingerprint ? `${eventId}|${fingerprint}` : eventId;
     // Set idempotency key with 24 hours TTL
     await redis.set(`idem:${key}`, value, 'EX', 86400);
   }
