@@ -1,4 +1,5 @@
-import { pgTable, uuid, varchar, timestamp, boolean, integer } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, timestamp, boolean, integer, pgEnum, bigint, jsonb, index, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const organizations = pgTable("organizations", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -28,4 +29,54 @@ export const apiKeys = pgTable("api_keys", {
   status: varchar("status", { length: 20 }).notNull().default('active'), // 'active', 'revoked'
   createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+});
+
+export const leaseStatusEnum = pgEnum('lease_status', ['active', 'released', 'expired']);
+
+export const quotaEventTypeEnum = pgEnum('quota_event_type', [
+  'LEASE_CLAIM', 'LEASE_RELEASE', 'LEASE_EXPIRE',
+  'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL',
+  'ALLOCATION_ADJUST', 'RECONCILIATION_CORRECTION',
+]);
+
+export const leases = pgTable("leases", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  orgId: uuid('org_id')
+    .notNull()
+    .references(() => organizations.id, { onDelete: 'restrict' }),
+  serviceId: uuid('service_id')
+    .notNull()
+    .references(() => services.id, { onDelete: 'restrict' }),
+  amount: bigint("amount", { mode: 'number' }).notNull(),
+  status: leaseStatusEnum("status").notNull().default('active'),
+  claimedAt: timestamp("claimed_at", { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+  releasedAt: timestamp("released_at", { withTimezone: true, mode: 'string' }),
+}, (table) => {
+  return {
+    activeByServiceIdx: index("idx_leases_active_by_service").on(table.serviceId, table.expiresAt).where(sql`${table.status} = 'active'`),
+    expiryScanIdx: index("idx_leases_expiry_scan").on(table.expiresAt).where(sql`${table.status} = 'active'`),
+    amountPositiveCheck: check('leases_amount_check', sql`${table.amount} > 0`),
+  };
+});
+
+export const quotaEvents = pgTable("quota_events", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  eventType: quotaEventTypeEnum("event_type").notNull(),
+  orgId: uuid("org_id").notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  counterpartOrgId: uuid("counterpart_org_id").references(() => organizations.id, { onDelete: 'restrict' }),
+  serviceId: uuid("service_id").references(() => services.id, { onDelete: 'restrict' }),
+  leaseId: uuid("lease_id").references(() => leases.id, { onDelete: 'restrict' }),
+  loanId: uuid("loan_id"), // FK to loans table (to be created in Phase 3)
+  amount: bigint("amount", { mode: 'number' }).notNull(),
+  balanceAfter: bigint("balance_after", { mode: 'number' }).notNull(),
+  idempotencyKey: varchar("idempotency_key", { length: 128 }).unique(),
+  metadata: jsonb("metadata").notNull().default({}),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+}, (table) => {
+  return {
+    orgTimeIdx: index("idx_quota_events_org_time").on(table.orgId, table.createdAt.desc()),
+    amountPositiveCheck: check('quota_events_amount_check', sql`${table.amount} > 0`),
+    balanceNonNegativeCheck: check('quota_events_balance_check', sql`${table.balanceAfter} >= 0`),
+  };
 });

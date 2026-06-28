@@ -31,13 +31,20 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
     const elapsed = now - currentWindowStart;
     const previousWeight = 1 - (elapsed / windowSizeMs);
 
+    let effectiveLimit = limit;
+    try {
+      effectiveLimit = await redis.getEffectiveLimit(`quota:lease:active:${orgId}`, limit.toString());
+    } catch (err) {
+      request.log.error({ err }, 'Failed to get effective limit. Falling back to default limit.');
+    }
+
     try {
       const result = await redis.evalsha(
         slidingWindowScriptSha,
         2, // number of keys
         currentKey,
         previousKey,
-        limit,
+        effectiveLimit,
         windowSizeMs,
         now,
         previousWeight
@@ -47,8 +54,8 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
       const estimatedCount = result[1];
 
       // Set informative headers
-      reply.header('X-RateLimit-Limit', limit);
-      reply.header('X-RateLimit-Remaining', Math.max(0, limit - estimatedCount));
+      reply.header('X-RateLimit-Limit', effectiveLimit);
+      reply.header('X-RateLimit-Remaining', Math.max(0, effectiveLimit - estimatedCount));
       reply.header('X-RateLimit-Reset', currentWindowStart + windowSizeMs);
 
       if (!allowed) {
@@ -66,12 +73,19 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
         reply.header('X-Limiter-Fallback', 'fail-open');
         // Let it pass through
         return;
+      } else if (failOpen === false) {
+        reply.header('X-Limiter-Fallback', 'fail-closed');
+        reply.header('Retry-After', 30);
+        return reply.status(429).send({
+          error: 'Too Many Requests',
+          message: 'Rate limiter degraded and organization is fail-closed',
+        });
       } else {
         reply.header('X-Limiter-Fallback', 'fail-closed');
         reply.header('Retry-After', 30);
         return reply.status(503).send({
           error: 'Service Unavailable',
-          message: 'Rate limiter degraded and organization is fail-closed',
+          message: 'Rate limiter degraded and org config is unknown',
         });
       }
     }

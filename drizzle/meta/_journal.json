@@ -8,6 +8,34 @@
       "when": 1782596493445,
       "tag": "0000_wise_white_tiger",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782620271727,
+      "tag": "0001_wooden_santa_claus",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1782621064873,
+      "tag": "0002_elite_vengeance",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782623078296,
+      "tag": "0003_melted_dreaming_celestial",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782623296030,
+      "tag": "0004_gray_sleeper",
+      "breakpoints": true
     }
   ]
 }
