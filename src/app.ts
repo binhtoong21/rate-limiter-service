@@ -1,5 +1,6 @@
 import fastify, { FastifyInstance } from 'fastify';
 import { authPlugin } from './plugins/auth';
+import { luaScriptsPlugin } from './plugins/lua-scripts';
 import { rateLimitPlugin } from './plugins/rate-limit';
 import systemRoutes from './routes/system';
 import devBootstrapRoutes from './routes/dev/bootstrap';
@@ -17,6 +18,7 @@ export function buildApp(opts = {}): FastifyInstance {
   });
 
   // Register Plugins
+  app.register(luaScriptsPlugin);
   app.register(authPlugin);
   app.register(rateLimitPlugin);
 
