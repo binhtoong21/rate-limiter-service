@@ -71,7 +71,7 @@ export class QuotaService {
             orgId,
             serviceId,
             amount,
-            expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+            expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
             status: 'active',
           })
           .returning();
@@ -110,7 +110,7 @@ export class QuotaService {
             orgId,
             serviceId,
             amount.toString(),
-            newLease.expiresAt.getTime().toString(),
+            new Date(newLease.expiresAt).getTime().toString(),
             ttlSeconds.toString()
           );
         } catch (luaErr: any) {
@@ -194,7 +194,7 @@ export class QuotaService {
         .update(leases)
         .set({
           status: 'released',
-          releasedAt: new Date(),
+          releasedAt: new Date().toISOString(),
         })
         .where(and(eq(leases.id, leaseId), eq(leases.status, 'active')))
         .returning();

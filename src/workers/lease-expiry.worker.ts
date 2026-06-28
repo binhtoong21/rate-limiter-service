@@ -13,14 +13,14 @@ const connection = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', 
   maxRetriesPerRequest: null,
 });
 
-export const leaseExpiryQueue = new Queue('lease-expiry', { connection });
+export const leaseExpiryQueue = new Queue('lease-expiry', { connection: connection as any });
 
 export const leaseExpiryWorker = new Worker('lease-expiry', async (job) => {
   // 1. SELECT expired leases (status='active' AND expires_at < NOW()) LIMIT 100
   const expiredLeases = await db
     .select()
     .from(leases)
-    .where(and(eq(leases.status, 'active'), lt(leases.expiresAt, new Date())))
+    .where(and(eq(leases.status, 'active'), lt(leases.expiresAt, new Date().toISOString())))
     .limit(100);
 
   if (expiredLeases.length === 0) {
@@ -82,7 +82,7 @@ export const leaseExpiryWorker = new Worker('lease-expiry', async (job) => {
   }
 
   return { processed };
-}, { connection });
+}, { connection: connection as any });
 
 leaseExpiryWorker.on('failed', (job, err) => {
   logger.error({ err, jobId: job?.id }, 'Lease expiry job failed');

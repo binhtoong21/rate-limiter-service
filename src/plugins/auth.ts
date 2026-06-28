@@ -20,7 +20,7 @@ declare module 'fastify' {
 }
 
 export const authPlugin = fp(async (fastify, opts) => {
-  fastify.decorateRequest('auth', null);
+  fastify.decorateRequest('auth', null as unknown as AuthContext);
 
   fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
     // Skip auth for health and dev routes
