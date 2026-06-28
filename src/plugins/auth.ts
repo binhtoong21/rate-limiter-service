@@ -10,6 +10,7 @@ export interface AuthContext {
   serviceId: string;
   orgId: string;
   failOpen: boolean;
+  isAdmin: boolean;
 }
 
 declare module 'fastify' {
@@ -60,6 +61,7 @@ export const authPlugin = fp(async (fastify, opts) => {
           orgId: organizations.id,
           failOpen: organizations.failOpen,
           status: apiKeys.status,
+          isAdmin: services.isAdmin,
         })
         .from(apiKeys)
         .innerJoin(services, eq(apiKeys.serviceId, services.id))
@@ -75,6 +77,7 @@ export const authPlugin = fp(async (fastify, opts) => {
         serviceId: record.serviceId,
         orgId: record.orgId,
         failOpen: record.failOpen,
+        isAdmin: record.isAdmin,
       };
 
       request.auth = authContext;
