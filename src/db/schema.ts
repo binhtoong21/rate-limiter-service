@@ -1,4 +1,4 @@
-import { pgTable, uuid, varchar, timestamp, boolean, integer, pgEnum, bigint, jsonb, index, check } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, timestamp, boolean, integer, pgEnum, bigint, jsonb, index, check, text } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 export const organizations = pgTable("organizations", {
@@ -33,9 +33,12 @@ export const apiKeys = pgTable("api_keys", {
 
 export const leaseStatusEnum = pgEnum('lease_status', ['active', 'released', 'expired']);
 
+export const loanStatusEnum = pgEnum('loan_status', ['active', 'repaid', 'expired', 'cancelled']);
+
 export const quotaEventTypeEnum = pgEnum('quota_event_type', [
   'LEASE_CLAIM', 'LEASE_RELEASE', 'LEASE_EXPIRE',
   'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL',
+  'TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED',
   'ALLOCATION_ADJUST', 'RECONCILIATION_CORRECTION',
 ]);
 
@@ -60,6 +63,27 @@ export const leases = pgTable("leases", {
   };
 });
 
+export const loans = pgTable("loans", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  lenderOrgId: uuid("lender_org_id").notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  borrowerOrgId: uuid("borrower_org_id").notNull().references(() => organizations.id, { onDelete: 'restrict' }),
+  amount: bigint("amount", { mode: 'number' }).notNull(),
+  status: loanStatusEnum("status").notNull().default('active'),
+  note: text('note'),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+  settledAt: timestamp("settled_at", { withTimezone: true, mode: 'string' }),
+}, (table) => {
+  return {
+    lenderActiveIdx: index("idx_loans_lender_active").on(table.lenderOrgId, table.createdAt.desc()).where(sql`${table.status} = 'active'`),
+    borrowerActiveIdx: index("idx_loans_borrower_active").on(table.borrowerOrgId, table.createdAt.desc()).where(sql`${table.status} = 'active'`),
+    expiryScanIdx: index("idx_loans_expiry_scan").on(table.expiresAt).where(sql`${table.status} = 'active'`),
+    differentOrgsCheck: check('loans_different_orgs_check', sql`${table.lenderOrgId} != ${table.borrowerOrgId}`),
+    amountPositiveCheck: check('loans_amount_check', sql`${table.amount} > 0`),
+    expiresAfterCreated: check("loans_expires_after_created", sql`${table.expiresAt} > ${table.createdAt}`)
+  };
+});
+
 export const quotaEvents = pgTable("quota_events", {
   id: uuid("id").primaryKey().defaultRandom(),
   eventType: quotaEventTypeEnum("event_type").notNull(),
@@ -67,7 +91,7 @@ export const quotaEvents = pgTable("quota_events", {
   counterpartOrgId: uuid("counterpart_org_id").references(() => organizations.id, { onDelete: 'restrict' }),
   serviceId: uuid("service_id").references(() => services.id, { onDelete: 'restrict' }),
   leaseId: uuid("lease_id").references(() => leases.id, { onDelete: 'restrict' }),
-  loanId: uuid("loan_id"), // FK to loans table (to be created in Phase 3)
+  loanId: uuid("loan_id").references(() => loans.id, { onDelete: 'restrict' }),
   amount: bigint("amount", { mode: 'number' }).notNull(),
   balanceAfter: bigint("balance_after", { mode: 'number' }).notNull(),
   idempotencyKey: varchar("idempotency_key", { length: 128 }).unique(),
@@ -76,6 +100,9 @@ export const quotaEvents = pgTable("quota_events", {
 }, (table) => {
   return {
     orgTimeIdx: index("idx_quota_events_org_time").on(table.orgId, table.createdAt.desc()),
+    tradingEventsIdx: index("idx_quota_events_trading")
+      .on(table.orgId, table.createdAt.desc())
+      .where(sql`${table.eventType} IN ('TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED', 'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL')`),
     amountPositiveCheck: check('quota_events_amount_check', sql`${table.amount} > 0`),
     balanceNonNegativeCheck: check('quota_events_balance_check', sql`${table.balanceAfter} >= 0`),
   };

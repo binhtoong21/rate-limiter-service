@@ -3,7 +3,7 @@ import Redis from 'ioredis';
 import pino from 'pino';
 import { db } from '../db';
 import { leases, quotaEvents } from '../db/schema';
-import { eq, and, lt } from 'drizzle-orm';
+import { eq, and, lt, sql } from 'drizzle-orm';
 import { redis as defaultRedis } from '../redis';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -33,14 +33,16 @@ export const startLeaseExpiryWorker = async () => {
   // 2. For each:
   for (const lease of expiredLeases) {
     try {
-      // a. GET available (best effort) → balance_after
-      // ⚠️ Cùng trade-off với service layer: GET ngoài transaction, balance_after là estimate.
-      const poolAvailableStr = await defaultRedis.get(`quota:pool:${lease.orgId}:available`);
-      const available = parseInt(poolAvailableStr || '0', 10);
-      const balanceAfter = available + lease.amount;
-
-      // b. db.transaction
+      // b. db.transaction (with row-level lock)
       await db.transaction(async (tx) => {
+        // Lock org
+        await tx.execute(sql`SELECT id FROM organizations WHERE id = ${lease.orgId} FOR UPDATE`);
+
+        // a. GET available (synchronized)
+        const poolAvailableStr = await defaultRedis.get(`quota:pool:${lease.orgId}:available`);
+        const available = parseInt(poolAvailableStr || '0', 10);
+        const balanceAfter = available + lease.amount;
+
         const [updatedLease] = await tx
           .update(leases)
           .set({ status: 'expired' })

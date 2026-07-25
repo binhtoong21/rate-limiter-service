@@ -1,0 +1,1 @@
+ALTER TABLE "loans" ALTER COLUMN "note" SET DATA TYPE text;
