@@ -18,9 +18,8 @@ local active_loans_borrower_key = KEYS[6]
 local amount = tonumber(ARGV[1])
 local loan_id = ARGV[2]
 
--- Idempotency / EXISTS guard (race condition safety net)
 if redis.call('SISMEMBER', active_loans_lender_key, loan_id) == 0 then
-  return { err = "LOAN_ALREADY_SETTLED" }
+  return { "LOAN_ALREADY_SETTLED" }
 end
 
 -- Reverse operations of create_loan

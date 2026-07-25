@@ -3,7 +3,7 @@ import Redis from 'ioredis';
 import pino from 'pino';
 import { db } from '../db';
 import { organizations, quotaEvents, loans } from '../db/schema';
-import { eq, asc } from 'drizzle-orm';
+import { eq, asc, sql } from 'drizzle-orm';
 import { redis as defaultRedis } from '../redis';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
@@ -23,25 +23,28 @@ export const startReconciliationWorker = async () => {
       try {
         const orgId = org.id;
         
-        let expectedTotal = 0;
-        let expectedReserved = 0;
-        let expectedLoanedOut = 0;
-        let expectedReceived = 0;
+        await db.transaction(async (tx) => {
+          await tx.execute(sql`SELECT id FROM organizations WHERE id = ${orgId} FOR UPDATE`);
 
-        const activeLeaseIds = new Set<string>();
-        const activeLenderLoanIds = new Set<string>();
-        const activeBorrowerLoanIds = new Set<string>();
+          let expectedTotal = 0;
+          let expectedReserved = 0;
+          let expectedLoanedOut = 0;
+          let expectedReceived = 0;
 
-        // Replay all events for the org
-        const events = await db
-          .select({
-            event: quotaEvents,
-            loan: loans
-          })
-          .from(quotaEvents)
-          .leftJoin(loans, eq(quotaEvents.loanId, loans.id))
-          .where(eq(quotaEvents.orgId, orgId))
-          .orderBy(asc(quotaEvents.createdAt), asc(quotaEvents.id));
+          const activeLeaseIds = new Set<string>();
+          const activeLenderLoanIds = new Set<string>();
+          const activeBorrowerLoanIds = new Set<string>();
+
+          // Replay all events for the org
+          const events = await tx
+            .select({
+              event: quotaEvents,
+              loan: loans
+            })
+            .from(quotaEvents)
+            .leftJoin(loans, eq(quotaEvents.loanId, loans.id))
+            .where(eq(quotaEvents.orgId, orgId))
+            .orderBy(asc(quotaEvents.createdAt), asc(quotaEvents.id));
 
         for (const { event, loan } of events) {
           switch (event.eventType) {
@@ -163,7 +166,7 @@ export const startReconciliationWorker = async () => {
           processed++;
           
           if (driftAmount > 0) {
-            await db.insert(quotaEvents).values({
+            await tx.insert(quotaEvents).values({
               eventType: 'RECONCILIATION_CORRECTION',
               orgId: orgId,
               amount: driftAmount,
@@ -179,6 +182,7 @@ export const startReconciliationWorker = async () => {
             });
           }
         }
+        }); // end transaction
       } catch (err) {
         logger.error({ err, orgId: org.id }, 'Failed to process org in reconciliation');
       }

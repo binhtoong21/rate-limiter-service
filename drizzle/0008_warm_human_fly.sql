@@ -1,0 +1,5 @@
+ALTER TABLE "quota_events" DROP CONSTRAINT "quota_events_balance_check";--> statement-breakpoint
+ALTER TABLE "quota_events" ALTER COLUMN "event_type" SET DATA TYPE text;--> statement-breakpoint
+DROP TYPE "public"."quota_event_type";--> statement-breakpoint
+CREATE TYPE "public"."quota_event_type" AS ENUM('ALLOCATION_ADJUST', 'LEASE_CLAIM', 'LEASE_RELEASE', 'LEASE_EXPIRE', 'LEASE_CLAIM_FAILED', 'LEASE_RELEASE_FAILED', 'TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED', 'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_CANCEL', 'LOAN_EXPIRE', 'LOAN_CREATE_FAILED', 'LOAN_REPAY_FAILED', 'LOAN_CANCEL_FAILED', 'LOAN_EXPIRE_FAILED', 'RECONCILIATION_CORRECTION');--> statement-breakpoint
+ALTER TABLE "quota_events" ALTER COLUMN "event_type" SET DATA TYPE "public"."quota_event_type" USING "event_type"::"public"."quota_event_type";

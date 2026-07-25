@@ -164,7 +164,7 @@ const loansRoutes: FastifyPluginAsync = async (fastify) => {
 
     const { orgId } = request.auth;
     const { role, status, cursor } = request.query;
-    const limit = parseInt(request.query.limit || '50', 10);
+    const queryLimit = Math.min(Math.max(Number(request.query.limit) || 50, 1), 100);
     
     const filters = [];
     
@@ -189,27 +189,30 @@ const loansRoutes: FastifyPluginAsync = async (fastify) => {
         const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
         const [cursorTime, cursorId] = decoded.split('_');
         if (cursorTime && cursorId) {
-          filters.push(sql`(${loans.createdAt} < ${cursorTime}::timestamp OR (${loans.createdAt} = ${cursorTime}::timestamp AND ${loans.id} < ${cursorId}))`);
+          filters.push(sql`(${loans.createdAt} < ${cursorTime}::timestamptz OR (${loans.createdAt} = ${cursorTime}::timestamptz AND ${loans.id} < ${cursorId}))`);
         }
       } catch (e) {
         // ignore invalid cursor
       }
     }
 
-    const data = await db
+    const results = await db
       .select()
       .from(loans)
       .where(and(...filters))
       .orderBy(desc(loans.createdAt), desc(loans.id))
-      .limit(limit);
+      .limit(queryLimit + 1);
+
+    const hasMore = results.length > queryLimit;
+    const items = hasMore ? results.slice(0, queryLimit) : results;
 
     let next_cursor = null;
-    if (data.length > 0) {
-      const lastItem = data[data.length - 1];
+    if (hasMore) {
+      const lastItem = items[items.length - 1];
       next_cursor = Buffer.from(`${new Date(lastItem.createdAt).toISOString()}_${lastItem.id}`).toString('base64');
     }
 
-    const formatted = data.map(l => ({
+    const formatted = items.map(l => ({
       id: l.id,
       lender_org_id: l.lenderOrgId,
       borrower_org_id: l.borrowerOrgId,

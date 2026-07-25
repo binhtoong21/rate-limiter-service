@@ -35,11 +35,25 @@ export const leaseStatusEnum = pgEnum('lease_status', ['active', 'released', 'ex
 
 export const loanStatusEnum = pgEnum('loan_status', ['active', 'repaid', 'expired', 'cancelled']);
 
-export const quotaEventTypeEnum = pgEnum('quota_event_type', [
-  'LEASE_CLAIM', 'LEASE_RELEASE', 'LEASE_EXPIRE',
-  'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL',
-  'TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED',
-  'ALLOCATION_ADJUST', 'RECONCILIATION_CORRECTION',
+export const quotaEventTypeEnum = pgEnum("quota_event_type", [
+  'ALLOCATION_ADJUST',
+  'LEASE_CLAIM',
+  'LEASE_RELEASE',
+  'LEASE_EXPIRE',
+  'LEASE_CLAIM_FAILED',
+  'LEASE_RELEASE_FAILED',
+  'TRANSFER_DEBIT',
+  'TRANSFER_CREDIT',
+  'TRANSFER_FAILED',
+  'LOAN_CREATE',
+  'LOAN_REPAY',
+  'LOAN_CANCEL',
+  'LOAN_EXPIRE',
+  'LOAN_CREATE_FAILED',
+  'LOAN_REPAY_FAILED',
+  'LOAN_CANCEL_FAILED',
+  'LOAN_EXPIRE_FAILED',
+  'RECONCILIATION_CORRECTION'
 ]);
 
 export const leases = pgTable("leases", {
@@ -103,7 +117,6 @@ export const quotaEvents = pgTable("quota_events", {
     tradingEventsIdx: index("idx_quota_events_trading")
       .on(table.orgId, table.createdAt.desc())
       .where(sql`${table.eventType} IN ('TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED', 'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL')`),
-    amountPositiveCheck: check('quota_events_amount_check', sql`${table.amount} > 0`),
-    balanceNonNegativeCheck: check('quota_events_balance_check', sql`${table.balanceAfter} >= 0`),
+    amountPositiveCheck: check('quota_events_amount_check', sql`${table.amount} > 0`)
   };
 });

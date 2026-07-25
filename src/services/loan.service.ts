@@ -156,6 +156,16 @@ export class LoanService {
       });
     } catch (err: any) {
       if (err.message === 'INSUFFICIENT_QUOTA') {
+        // Fallback insert for architecture contract
+        await db.insert(quotaEvents).values({
+          eventType: 'LOAN_CREATE_FAILED',
+          orgId: lenderOrgId,
+          counterpartOrgId: borrowerOrgId,
+          amount,
+          balanceAfter: 0, // Fallback balance
+          idempotencyKey, 
+          metadata: { reason: err.message }
+        }).catch(e => { /* Ignore failure on failure */ });
         throw err;
       }
       
@@ -344,17 +354,17 @@ export class LoanService {
             loanId
           );
 
-          if (!Array.isArray(res) && (res as any).err) {
-            if ((res as any).err !== 'LOAN_ALREADY_SETTLED') {
-               throw new Error((res as any).err);
-            }
+          if (Array.isArray(res) && res[0] === 'LOAN_ALREADY_SETTLED') {
+             // Idempotent success, already settled in Redis
+          } else if (!Array.isArray(res) && (res as any).err) {
+             throw new Error((res as any).err);
           }
         } catch (luaErr: any) {
           throw luaErr;
         }
       });
     } catch (err: any) {
-      if (err.code === '23505' && idempotencyKey) {
+      if (err.code === '23505' && err.constraint_name === 'quota_events_idempotency_key_unique' && idempotencyKey) {
         const existingEvent = await idempotencyService.handleUniqueViolation(idempotencyKey);
         if (existingEvent.loanId) {
           const [existingLoanCheck] = await db
@@ -364,6 +374,7 @@ export class LoanService {
             .limit(1);
           if (existingLoanCheck) return existingLoanCheck;
         }
+        throw new Error('Idempotency collision but loan not found');
       }
       throw err;
     }

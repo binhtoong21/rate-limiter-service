@@ -23,8 +23,20 @@ const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     const filters = [eq(quotaEvents.orgId, orgId)];
 
     if (event_type) {
-      const types = event_type.split(',') as any[];
-      filters.push(inArray(quotaEvents.eventType, types));
+      const allowedTypes = new Set([
+        'ALLOCATION_ADJUST', 'LEASE_CLAIM', 'LEASE_RELEASE', 'LEASE_EXPIRE',
+        'LEASE_CLAIM_FAILED', 'LEASE_RELEASE_FAILED', 'TRANSFER_DEBIT',
+        'TRANSFER_CREDIT', 'TRANSFER_FAILED', 'LOAN_CREATE', 'LOAN_REPAY',
+        'LOAN_CANCEL', 'LOAN_EXPIRE', 'LOAN_CREATE_FAILED', 'LOAN_REPAY_FAILED',
+        'LOAN_CANCEL_FAILED', 'LOAN_EXPIRE_FAILED', 'RECONCILIATION_CORRECTION'
+      ]);
+      const types = event_type.split(',');
+      for (const t of types) {
+        if (!allowedTypes.has(t)) {
+          return reply.status(400).send({ success: false, error: { code: 'INVALID_EVENT_TYPE', message: `Invalid event_type: ${t}` } });
+        }
+      }
+      filters.push(inArray(quotaEvents.eventType, types as any[]));
     }
     
     if (service_id) {
@@ -36,7 +48,7 @@ const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         const decoded = Buffer.from(cursor, 'base64').toString('utf-8');
         const [cursorTime, cursorId] = decoded.split('_');
         if (cursorTime && cursorId) {
-          filters.push(sql`(${quotaEvents.createdAt} < ${cursorTime}::timestamp OR (${quotaEvents.createdAt} = ${cursorTime}::timestamp AND ${quotaEvents.id} < ${cursorId}))`);
+          filters.push(sql`(${quotaEvents.createdAt} < ${cursorTime}::timestamptz OR (${quotaEvents.createdAt} = ${cursorTime}::timestamptz AND ${quotaEvents.id} < ${cursorId}))`);
         }
       } catch (e) {
         // ignore invalid cursor
