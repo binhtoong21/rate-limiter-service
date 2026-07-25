@@ -2,7 +2,7 @@ import { db } from '../db';
 import { leases, quotaEvents } from '../db/schema';
 import { redis } from '../redis';
 import { idempotencyService } from './idempotency.service';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, sql } from 'drizzle-orm';
 import { FastifyInstance } from 'fastify';
 
 export class InsufficientQuotaError extends Error {
@@ -58,22 +58,28 @@ export class QuotaService {
       throw new Error('Idempotency collision but lease not found');
     }
 
-    // Step 2: Tính balance_after (best-effort estimate)
-    const poolAvailableStr = await redis.get(`quota:pool:${orgId}:available`);
-    const available = parseInt(poolAvailableStr || '0', 10);
-    const balanceAfter = available - amount;
-
-    if (balanceAfter < 0) {
-      throw new InsufficientQuotaError();
-    }
-
     let createdLeaseId: string | undefined;
     let createdEventId: string | undefined;
     let returnedLease: typeof leases.$inferSelect | undefined;
 
-    // Step 3: Atomic Unit (PG tx + Lua)
+    // Step 2 & 3: Atomic Unit (PG tx + Lua)
     try {
       await db.transaction(async (tx) => {
+        // 2A: Row-level lock on the organization to serialize concurrent requests
+        // Trade-off: This lock is held across the Redis Lua execution network trip.
+        // This causes potential lock contention for high-traffic orgs, but is required
+        // to ensure balanceAfter correctness without violating the dual-write order.
+        await tx.execute(sql`SELECT id FROM organizations WHERE id = ${orgId} FOR UPDATE`);
+
+        // 2B: Tính balance_after (now fully synchronized per org)
+        const poolAvailableStr = await redis.get(`quota:pool:${orgId}:available`);
+        const available = parseInt(poolAvailableStr || '0', 10);
+        const balanceAfter = available - amount;
+
+        if (balanceAfter < 0) {
+          throw new InsufficientQuotaError();
+        }
+
         // 3A: PostgreSQL INSERT
         const [newLease] = await tx
           .insert(leases)
@@ -138,8 +144,8 @@ export class QuotaService {
         throw err;
       }
       
-      // PostgreSQL unique violation error code is 23505
-      if (err.code === '23505' && err.constraint === 'quota_events_idempotency_key_unique') {
+      // PostgreSQL unique violation error constraint_name (porsager driver)
+      if (err.code === '23505' && err.constraint_name === 'quota_events_idempotency_key_unique') {
         // ⚠️ Issue #4: Handle crash recovery for idempotency key
         // Transaction hiện tại đã bị aborted. Ta dùng connection mới để query:
         const existingEvent = await idempotencyService.handleUniqueViolation(idempotencyKey);
@@ -190,15 +196,18 @@ export class QuotaService {
       throw new Error('LEASE_ALREADY_RELEASED');
     }
 
-    // Step 2: Tính balance_after (best-effort)
-    const poolAvailableStr = await redis.get(`quota:pool:${existingLease.orgId}:available`);
-    const available = parseInt(poolAvailableStr || '0', 10);
-    const balanceAfter = available + existingLease.amount;
-
     let returnedLease: typeof leases.$inferSelect | undefined;
 
-    // Step 3: Atomic Unit (PG tx + Lua)
+    // Step 2 & 3: Atomic Unit (PG tx + Lua)
     await db.transaction(async (tx) => {
+      // Lock org
+      await tx.execute(sql`SELECT id FROM organizations WHERE id = ${existingLease.orgId} FOR UPDATE`);
+
+      // 2A: Tính balance_after (synchronized)
+      const poolAvailableStr = await redis.get(`quota:pool:${existingLease.orgId}:available`);
+      const available = parseInt(poolAvailableStr || '0', 10);
+      const balanceAfter = available + existingLease.amount;
+
       // 3A: Update PG
       const [updatedLease] = await tx
         .update(leases)

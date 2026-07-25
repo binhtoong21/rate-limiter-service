@@ -1,0 +1,1 @@
+ALTER TABLE "loans" ADD CONSTRAINT "loans_expires_after_created" CHECK ("loans"."expires_at" > "loans"."created_at");

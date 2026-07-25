@@ -36,6 +36,34 @@ declare module 'ioredis' {
       poolReservedKey: string,
       newTotalAmount: string
     ): Promise<string>;
+    
+    createLoan(
+      lenderAvailableKey: string,
+      lenderLoanedOutKey: string,
+      borrowerReceivedKey: string,
+      borrowerAvailableKey: string,
+      activeLoansLenderKey: string,
+      activeLoansBorrowerKey: string,
+      loanHashKey: string,
+      amount: string,
+      loanId: string,
+      lenderOrgId: string,
+      borrowerOrgId: string,
+      expiresAt: string,
+      ttlSeconds: string
+    ): Promise<string[] | { err: string }>;
+    
+    settleLoan(
+      lenderAvailableKey: string,
+      lenderLoanedOutKey: string,
+      borrowerReceivedKey: string,
+      borrowerAvailableKey: string,
+      activeLoansLenderKey: string,
+      activeLoansBorrowerKey: string,
+      loanHashKey: string,
+      amount: string,
+      loanId: string
+    ): Promise<string[] | { err: string }>;
   }
 }
 
