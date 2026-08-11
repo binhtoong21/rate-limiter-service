@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'rate-limiter'
+    static_configs:
+      - targets: ['host.docker.internal:3000']
+    # When running app inside Docker Compose as 'app' service, change to:
+    # - targets: ['app:3000']
