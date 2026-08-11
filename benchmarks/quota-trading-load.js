@@ -28,8 +28,9 @@ export function setup() {
 }
 
 export function serviceTraffic(data) {
-  const res = http.post(`${BASE_URL}/api/ping`, null, {
+  const res = http.post(`${BASE_URL}/api/ping`, "{}", {
     headers: getAuthHeaders(data.apiKey),
+    responseCallback: http.expectedStatuses(200, 429),
   });
 
   check(res, {

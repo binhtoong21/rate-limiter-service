@@ -18,10 +18,10 @@ export const rateLimitRequestsTotal = new client.Counter({
 });
 
 export const rateLimitCheckDuration = new client.Histogram({
-  name: 'rate_limit_check_duration_ms',
-  help: 'Rate limit check latency in milliseconds',
+  name: 'rate_limit_check_duration_seconds',
+  help: 'Rate limit check latency in seconds',
   labelNames: ['algorithm'] as const,
-  buckets: [0.5, 1, 2, 5, 10, 25, 50],
+  buckets: [0.0005, 0.001, 0.002, 0.005, 0.010, 0.025, 0.050],
   registers: [register],
 });
 
@@ -65,10 +65,10 @@ export const quotaOperationTotal = new client.Counter({
 });
 
 export const quotaOperationDuration = new client.Histogram({
-  name: 'quota_operation_duration_ms',
-  help: 'Quota operation duration in milliseconds',
+  name: 'quota_operation_duration_seconds',
+  help: 'Quota operation duration in seconds',
   labelNames: ['type'] as const,
-  buckets: [1, 5, 10, 25, 50, 100, 250, 500],
+  buckets: [0.001, 0.005, 0.010, 0.025, 0.050, 0.100, 0.250, 0.500],
   registers: [register],
 });
 
@@ -88,9 +88,12 @@ export const reconciliationCorrectionsTotal = new client.Counter({
 
 // --- Periodic Gauge Collection ---
 
-let collectionInterval: ReturnType<typeof setInterval> | null = null;
+let collectionInterval: ReturnType<typeof setTimeout> | null = null;
+let collectionInProgress = false;
 
 async function collectPoolGauges() {
+  if (collectionInProgress) return;
+  collectionInProgress = true;
   try {
     const orgs = await db.select({ id: organizations.id }).from(organizations);
 
@@ -104,6 +107,18 @@ async function collectPoolGauges() {
 
       const results = await pipeline.exec();
       if (!results) continue;
+
+      let hasError = false;
+      for (const [err] of results) {
+        if (err) {
+          hasError = true;
+          // In a real plugin, we would use fastify.log.error here,
+          // but since this is a module-level function, we skip or log to console.
+          break;
+        }
+      }
+      
+      if (hasError) continue;
 
       const total = parseInt((results[0][1] as string) || '0', 10);
       const reserved = parseInt((results[1][1] as string) || '0', 10);
@@ -121,21 +136,21 @@ async function collectPoolGauges() {
     }
   } catch (err) {
     // Gauge collection is best-effort — don't crash the server
+  } finally {
+    collectionInProgress = false;
+    collectionInterval = setTimeout(collectPoolGauges, 15000);
   }
 }
 
 // --- Fastify Plugin ---
 
 export const metricsPlugin = fp(async (fastify) => {
-  // Start periodic collection every 15 seconds
-  collectionInterval = setInterval(collectPoolGauges, 15000);
-
-  // Run initial collection
+  // Run initial collection and start loop
   collectPoolGauges();
 
   fastify.addHook('onClose', () => {
     if (collectionInterval) {
-      clearInterval(collectionInterval);
+      clearTimeout(collectionInterval);
       collectionInterval = null;
     }
   });

@@ -88,7 +88,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(rate_limit_check_duration_ms_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(rate_limit_check_duration_seconds_bucket[5m])))",
           "legendFormat": "p95"
         },
         {
@@ -96,13 +96,13 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(rate_limit_check_duration_ms_bucket[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(rate_limit_check_duration_seconds_bucket[5m])))",
           "legendFormat": "p99"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms"
+          "unit": "s"
         },
         "overrides": []
       }
@@ -252,13 +252,13 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, type) (rate(quota_operation_duration_ms_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, type) (rate(quota_operation_duration_seconds_bucket[5m])))",
           "legendFormat": "{{type}}"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms"
+          "unit": "s"
         },
         "overrides": []
       }

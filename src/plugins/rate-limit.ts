@@ -87,7 +87,10 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
 
       if (!allowed) {
         if (algorithm === 'token_bucket') {
-          reply.header('Retry-After', Math.ceil(windowSizeMs / 1000));
+          // Retry-After based on refill rate (tokens per second)
+          // How long until 1 token is available?
+          const refillRate = effectiveLimit / (windowSizeMs / 1000);
+          reply.header('Retry-After', Math.ceil(1 / refillRate));
         } else {
           const currentWindowStart = Math.floor(now / windowSizeMs) * windowSizeMs;
           reply.header('Retry-After', Math.ceil((currentWindowStart + windowSizeMs - now) / 1000));

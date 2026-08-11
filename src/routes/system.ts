@@ -5,7 +5,9 @@ import { sql } from 'drizzle-orm';
 import { register } from '../plugins/metrics';
 
 export default async function (fastify: FastifyInstance) {
-  // Prometheus metrics endpoint
+  // Prometheus metrics endpoint (Internal access only)
+  // Note: This endpoint is an exception to the standard { data: {}, message?: string }
+  // success response format, as Prometheus requires raw text exposition format.
   fastify.get('/metrics', async (request, reply) => {
     reply.header('Content-Type', register.contentType);
     return reply.send(await register.metrics());
