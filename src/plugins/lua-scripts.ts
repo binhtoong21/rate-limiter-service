@@ -35,6 +35,7 @@ export const luaScriptsPlugin = fp(async (fastify, opts) => {
   scriptContents['setQuotaPool'] = fs.readFileSync(path.join(scriptsDir, 'set_quota_pool.lua'), 'utf8');
   scriptContents['createLoan'] = fs.readFileSync(path.join(scriptsDir, 'create_loan.lua'), 'utf8');
   scriptContents['settleLoan'] = fs.readFileSync(path.join(scriptsDir, 'settle_loan.lua'), 'utf8');
+  scriptContents['tokenBucketCheck'] = fs.readFileSync(path.join(scriptsDir, 'token_bucket.lua'), 'utf8');
 
   for (const cmd in scriptContents) {
     scriptShas[cmd] = await redis.script('LOAD', scriptContents[cmd]) as string;
@@ -47,6 +48,7 @@ export const luaScriptsPlugin = fp(async (fastify, opts) => {
   (redis as any).setQuotaPool = (...args: any[]) => evalShaWithRetry('setQuotaPool', 3, ...args);
   (redis as any).createLoan = (...args: any[]) => evalShaWithRetry('createLoan', 7, ...args);
   (redis as any).settleLoan = (...args: any[]) => evalShaWithRetry('settleLoan', 7, ...args);
+  (redis as any).tokenBucketCheck = (...args: any[]) => evalShaWithRetry('tokenBucketCheck', 1, ...args);
 
   fastify.log.info('Lua scripts loaded successfully via SCRIPT LOAD');
 });

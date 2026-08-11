@@ -4,6 +4,7 @@ import { redis } from '../redis';
 import { idempotencyService } from './idempotency.service';
 import { eq, and, sql } from 'drizzle-orm';
 import { FastifyInstance } from 'fastify';
+import { quotaOperationTotal, quotaOperationDuration } from '../plugins/metrics';
 
 export class InsufficientQuotaError extends Error {
   constructor(message = 'Insufficient quota') {
@@ -29,7 +30,9 @@ export class QuotaService {
     ttlSeconds: number;
     idempotencyKey: string;
   }): Promise<typeof leases.$inferSelect> {
-    const { orgId, serviceId, amount, ttlSeconds, idempotencyKey } = params;
+    const timer = quotaOperationDuration.startTimer({ type: 'claim_lease' });
+    try {
+      const { orgId, serviceId, amount, ttlSeconds, idempotencyKey } = params;
 
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       throw new Error('amount must be a positive integer');
@@ -172,14 +175,23 @@ export class QuotaService {
       await idempotencyService.mark(idempotencyKey, createdEventId, fingerprint);
     }
 
+    quotaOperationTotal.inc({ type: 'claim_lease', status: 'success' });
+    timer();
     return returnedLease!;
+  } catch (err) {
+    quotaOperationTotal.inc({ type: 'claim_lease', status: 'failure' });
+    timer();
+    throw err;
   }
+}
 
   async releaseLease(params: {
     leaseId: string;
     serviceId: string;
   }): Promise<typeof leases.$inferSelect> {
-    const { leaseId, serviceId } = params;
+    const timer = quotaOperationDuration.startTimer({ type: 'release_lease' });
+    try {
+      const { leaseId, serviceId } = params;
 
     // Step 1: Query existing lease
     const [existingLease] = await db
@@ -244,6 +256,13 @@ export class QuotaService {
       );
     });
 
+    quotaOperationTotal.inc({ type: 'release_lease', status: 'success' });
+    timer();
     return returnedLease!;
+  } catch (err) {
+    quotaOperationTotal.inc({ type: 'release_lease', status: 'failure' });
+    timer();
+    throw err;
   }
+}
 }

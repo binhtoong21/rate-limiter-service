@@ -4,6 +4,7 @@ import { redis } from '../redis';
 import { idempotencyService } from './idempotency.service';
 import { eq, and, sql } from 'drizzle-orm';
 import { FastifyInstance } from 'fastify';
+import { quotaOperationTotal, quotaOperationDuration } from '../plugins/metrics';
 
 export class NotFoundError extends Error {
   constructor(message = 'Resource not found') {
@@ -30,7 +31,9 @@ export class LoanService {
     note?: string;
     idempotencyKey: string;
   }): Promise<typeof loans.$inferSelect> {
-    const { lenderOrgId, borrowerOrgId, amount, ttlSeconds, note, idempotencyKey } = params;
+    const timer = quotaOperationDuration.startTimer({ type: 'create_loan' });
+    try {
+      const { lenderOrgId, borrowerOrgId, amount, ttlSeconds, note, idempotencyKey } = params;
 
     if (lenderOrgId === borrowerOrgId) {
       throw new Error('SELF_LOAN');
@@ -195,8 +198,15 @@ export class LoanService {
       await idempotencyService.mark(idempotencyKey, createdEventId, fingerprint);
     }
 
+    quotaOperationTotal.inc({ type: 'create_loan', status: 'success' });
+    timer();
     return returnedLoan!;
+  } catch (err) {
+    quotaOperationTotal.inc({ type: 'create_loan', status: 'failure' });
+    timer();
+    throw err;
   }
+}
 
   async settleLoan(params: {
     loanId: string;
@@ -204,7 +214,9 @@ export class LoanService {
     settleType: 'repay' | 'cancel' | 'expire';
     idempotencyKey?: string;
   }): Promise<typeof loans.$inferSelect> {
-    const { loanId, actorOrgId, settleType, idempotencyKey } = params;
+    const timer = quotaOperationDuration.startTimer({ type: `settle_loan_${params.settleType}` as any });
+    try {
+      const { loanId, actorOrgId, settleType, idempotencyKey } = params;
     
     // Determine the status and event type
     let newStatus: 'repaid' | 'cancelled' | 'expired';
@@ -384,6 +396,13 @@ export class LoanService {
       await idempotencyService.mark(idempotencyKey, createdEventId, fingerprint);
     }
 
+    quotaOperationTotal.inc({ type: `settle_loan_${settleType}` as any, status: 'success' });
+    timer();
     return returnedLoan!;
+  } catch (err) {
+    quotaOperationTotal.inc({ type: `settle_loan_${params.settleType}` as any, status: 'failure' });
+    timer();
+    throw err;
   }
+}
 }
