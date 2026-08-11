@@ -2,8 +2,15 @@ import { FastifyInstance } from 'fastify';
 import { db } from '../db';
 import { redis } from '../redis';
 import { sql } from 'drizzle-orm';
+import { register } from '../plugins/metrics';
 
 export default async function (fastify: FastifyInstance) {
+  // Prometheus metrics endpoint
+  fastify.get('/metrics', async (request, reply) => {
+    reply.header('Content-Type', register.contentType);
+    return reply.send(await register.metrics());
+  });
+
   // Healthcheck endpoint
   fastify.get('/health', async (request, reply) => {
     const health = {

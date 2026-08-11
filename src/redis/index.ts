@@ -82,3 +82,16 @@ redis.on('error', (err) => {
 redis.on('connect', () => {
   logger.info('Connected to Redis');
 });
+
+// Separate Redis client for metrics collection (background, non-hot-path)
+// Uses relaxed timeouts per 10-graceful-degradation.md §2.A
+export const metricsRedis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
+  maxRetriesPerRequest: 2,
+  connectTimeout: 2000,
+  commandTimeout: 500,
+});
+
+metricsRedis.on('error', (err) => {
+  logger.error({ err }, 'Metrics Redis connection error');
+});
+

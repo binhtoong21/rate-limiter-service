@@ -5,6 +5,7 @@ import { db } from '../db';
 import { organizations, quotaEvents, loans } from '../db/schema';
 import { eq, asc, sql } from 'drizzle-orm';
 import { redis as defaultRedis } from '../redis';
+import { reconciliationDivergenceTotal, reconciliationCorrectionsTotal } from '../plugins/metrics';
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
@@ -140,6 +141,8 @@ export const startReconciliationWorker = async () => {
         if (!areSetsEqual(redisActiveBorrowerLoans, activeBorrowerLoanIds)) drifted = true;
 
         if (drifted) {
+          reconciliationDivergenceTotal.inc();
+          
           logger.warn({
             orgId,
             expected: { total: expectedTotal, available: expectedAvailable, reserved: expectedReserved, loaned_out: expectedLoanedOut, received: expectedReceived },
@@ -164,6 +167,7 @@ export const startReconciliationWorker = async () => {
 
           await pipeline.exec();
           processed++;
+          reconciliationCorrectionsTotal.inc();
           
           if (driftAmount > 0) {
             await tx.insert(quotaEvents).values({

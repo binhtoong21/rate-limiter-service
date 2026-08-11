@@ -3,6 +3,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import fs from 'fs';
 import path from 'path';
 import { redis } from '../redis';
+import { rateLimitRequestsTotal, rateLimitCheckDuration } from './metrics';
 
 let slidingWindowScriptSha: string;
 
@@ -22,15 +23,8 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
   fastify.decorate('checkRateLimit', async (request: FastifyRequest, reply: FastifyReply, limit: number, windowSizeMs: number) => {
     const { orgId, failOpen } = request.auth;
     const now = Date.now();
-    const currentWindowStart = Math.floor(now / windowSizeMs) * windowSizeMs;
-    const previousWindowStart = currentWindowStart - windowSizeMs;
+    const algorithm = process.env.RATE_LIMIT_ALGORITHM === 'token_bucket' ? 'token_bucket' : 'sliding_window';
     
-    const currentKey = `rl:sw:${orgId}:${currentWindowStart}`;
-    const previousKey = `rl:sw:${orgId}:${previousWindowStart}`;
-    
-    const elapsed = now - currentWindowStart;
-    const previousWeight = 1 - (elapsed / windowSizeMs);
-
     let effectiveLimit = limit;
     try {
       effectiveLimit = await redis.getEffectiveLimit(`quota:lease:active:${orgId}`, limit.toString());
@@ -38,34 +32,73 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
       request.log.error({ err }, 'Failed to get effective limit. Falling back to default limit.');
     }
 
-    try {
-      const result = await redis.evalsha(
-        slidingWindowScriptSha,
-        2, // number of keys
-        currentKey,
-        previousKey,
-        effectiveLimit,
-        windowSizeMs,
-        now,
-        previousWeight
-      ) as [number, number];
+    const timer = rateLimitCheckDuration.startTimer({ algorithm });
 
-      const allowed = result[0] === 1;
-      const estimatedCount = result[1];
+    try {
+      let allowed = false;
+      let estimatedCount = 0;
+
+      if (algorithm === 'token_bucket') {
+        const tbKey = `rl:tb:${orgId}`;
+        const refillRate = effectiveLimit / (windowSizeMs / 1000); // tokens per second
+        
+        const result = await (redis as any).tokenBucketCheck(
+          tbKey,
+          effectiveLimit.toString(),
+          refillRate.toString(),
+          now.toString()
+        ) as [number, number];
+
+        allowed = result[0] === 1;
+        estimatedCount = effectiveLimit - result[1]; // remaining -> consumed
+      } else {
+        const currentWindowStart = Math.floor(now / windowSizeMs) * windowSizeMs;
+        const previousWindowStart = currentWindowStart - windowSizeMs;
+        
+        const currentKey = `rl:sw:${orgId}:${currentWindowStart}`;
+        const previousKey = `rl:sw:${orgId}:${previousWindowStart}`;
+        
+        const elapsed = now - currentWindowStart;
+        const previousWeight = 1 - (elapsed / windowSizeMs);
+
+        const result = await redis.evalsha(
+          slidingWindowScriptSha,
+          2, // number of keys
+          currentKey,
+          previousKey,
+          effectiveLimit,
+          windowSizeMs,
+          now,
+          previousWeight
+        ) as [number, number];
+
+        allowed = result[0] === 1;
+        estimatedCount = result[1];
+        
+        reply.header('X-RateLimit-Reset', currentWindowStart + windowSizeMs);
+      }
+      
+      timer(); // end timer
+      rateLimitRequestsTotal.inc({ org_id: orgId, result: allowed ? 'allowed' : 'rejected' });
 
       // Set informative headers
       reply.header('X-RateLimit-Limit', effectiveLimit);
       reply.header('X-RateLimit-Remaining', Math.max(0, effectiveLimit - estimatedCount));
-      reply.header('X-RateLimit-Reset', currentWindowStart + windowSizeMs);
 
       if (!allowed) {
-        reply.header('Retry-After', Math.ceil((currentWindowStart + windowSizeMs - now) / 1000));
+        if (algorithm === 'token_bucket') {
+          reply.header('Retry-After', Math.ceil(windowSizeMs / 1000));
+        } else {
+          const currentWindowStart = Math.floor(now / windowSizeMs) * windowSizeMs;
+          reply.header('Retry-After', Math.ceil((currentWindowStart + windowSizeMs - now) / 1000));
+        }
         return reply.status(429).send({
           error: 'Too Many Requests',
           message: 'Rate limit exceeded',
         });
       }
     } catch (err) {
+      timer(); // end timer even on failure
       request.log.error({ err }, 'Rate limit Redis operation failed');
       
       reply.header('X-Limiter-Degraded', 'true');
