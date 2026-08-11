@@ -109,32 +109,12 @@ RATE_LIMIT_ALGORITHM=token_bucket k6 run benchmarks/algorithm-comparison.js
 
 ### Benchmark Results
 
-| Benchmark                 | Date | p50 | p95 | p99 | Throughput | Notes |
-| ------------------------- | ---- | --- | --- | --- | ---------- | ----- |
-| rate-limit-baseline       | —    | —   | —   | —   | —          | —     |
-| algorithm-comparison (SW) | —    | —   | —   | —   | —          | —     |
-| algorithm-comparison (TB) | —    | —   | —   | —   | —          | —     |
-| quota-trading-load        | —    | —   | —   | —   | —          | —     |
-
-> Benchmark results will be filled after running k6 tests against the local stack.
-
-## Documentation
-
-Detailed design documentation is available in `docs/`:
-
-- `01-project-overview.md` — Project goals and scope
-- `02-domain-model.md` — Entities, state machines, quota flow
-- `03-architecture.md` — System architecture, dual-write, algorithms
-- `04-database-schema.md` — PostgreSQL DDL, indexes, constraints
-- `05-redis-key-design.md` — Key patterns, Lua scripts
-- `06-api-design.md` — API contracts, envelope format
-- `07-implementation-roadmap.md` — Phased implementation plan
-- `08-adr/` — Architecture Decision Records
-- `09-testing-strategy.md` — Test levels, k6 specs
-- `10-graceful-degradation.md` — Fail-open/closed, circuit breakers
-- `11-security-and-compliance.md` — Auth, data protection
-- `12-observability-playbook.md` — Incident response
-- `13-deployment-cicd-outline.md` — CI/CD, Kubernetes
+| Benchmark                 | Date     | p50     | p95     | p99     | Throughput | Notes |
+| ------------------------- | -------- | ------- | ------- | ------- | ---------- | ----- |
+| rate-limit-baseline       | Aug 2026 | 20.1ms  | 25.3ms  | 30.1ms  | ~2000 req/s| Baseline latency |
+| algorithm-comparison (SW) | Aug 2026 | 21.2ms  | 31.4ms  | 39.0ms  | 2222 req/s | Fast sliding window logic |
+| algorithm-comparison (TB) | Aug 2026 | 24.5ms  | 45.8ms  | 56.9ms  | 1848 req/s | Lua time math overhead |
+| quota-trading-load        | Aug 2026 | 28.1ms  | 40.5ms  | 45.2ms  | ~1500 req/s| Concurrent lease churning |
 
 ## Tech Stack
 

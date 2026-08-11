@@ -16,11 +16,14 @@ export function bootstrap() {
     },
   );
 
-  const data = JSON.parse(res.body).data;
+  if (res.status !== 200) {
+    console.log("Bootstrap failed:", res.status, res.body);
+  }
+  const data = JSON.parse(res.body);
   return {
     apiKey: data.apiKey,
-    orgId: data.orgId,
-    serviceId: data.serviceId,
+    orgId: data.organization.id,
+    serviceId: data.service.id,
   };
 }
 

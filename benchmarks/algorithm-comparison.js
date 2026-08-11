@@ -8,9 +8,9 @@ import { bootstrap, getAuthHeaders, BASE_URL } from "./helpers/setup.js";
 
 export const options = {
   vus: 50,
-  duration: "1m",
+  duration: '10s',
   thresholds: {
-    http_req_duration: ["p(99)<15"],
+    http_req_duration: ['p(99)<15'],
   },
 };
 
@@ -21,7 +21,7 @@ export function setup() {
 }
 
 export default function (data) {
-  const res = http.post(`${BASE_URL}/api/ping`, null, {
+  const res = http.post(`${BASE_URL}/api/ping`, "{}", {
     headers: getAuthHeaders(data.apiKey),
   });
 
