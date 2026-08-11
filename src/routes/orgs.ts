@@ -99,6 +99,58 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
 
     return reply.send({ data: { quotaAllocated: amount, available: parseInt(returnedAmount, 10) } });
   });
+
+  fastify.get<{
+    Params: { slug: string };
+  }>('/:slug/quota/pool', async (request, reply) => {
+    if (!request.auth.isAdmin) {
+      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Admin access required' });
+    }
+
+    const { slug } = request.params;
+
+    const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
+    if (!org) {
+      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Organization not found' });
+    }
+
+    const pipeline = redis.pipeline();
+    pipeline.get(`quota:pool:${org.id}:total`);
+    pipeline.get(`quota:pool:${org.id}:reserved`);
+    pipeline.get(`quota:pool:${org.id}:loaned_out`);
+    pipeline.get(`quota:pool:${org.id}:received`);
+    pipeline.get(`quota:pool:${org.id}:available`);
+
+    const results = await pipeline.exec();
+
+    if (!results) {
+      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis pipeline failed' });
+    }
+
+    const [totalErr, totalRes] = results[0];
+    const [reservedErr, reservedRes] = results[1];
+    const [loanedOutErr, loanedOutRes] = results[2];
+    const [receivedErr, receivedRes] = results[3];
+    const [availableErr, availableRes] = results[4];
+
+    if (totalErr || reservedErr || loanedOutErr || receivedErr || availableErr) {
+      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis read error' });
+    }
+
+    return reply.send({
+      data: {
+        orgId: org.id,
+        slug: org.slug,
+        pool: {
+          total: parseInt((totalRes as string) || '0', 10),
+          reserved: parseInt((reservedRes as string) || '0', 10),
+          loanedOut: parseInt((loanedOutRes as string) || '0', 10),
+          received: parseInt((receivedRes as string) || '0', 10),
+          available: parseInt((availableRes as string) || '0', 10),
+        },
+      },
+    });
+  });
 };
 
 export default orgsRoutes;
