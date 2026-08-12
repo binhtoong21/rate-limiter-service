@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { db } from '../db';
 import { organizations, quotaEvents } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { redis } from '../redis';
 import { idempotencyService } from '../services/idempotency.service';
 
@@ -88,17 +88,14 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     } catch (err: any) {
       if (err.code === '23505' && idempotencyKey) {
-        const event = await idempotencyService.handleUniqueViolation(idempotencyKey);
+        const primaryEvent = await idempotencyService.handleUniqueViolation(idempotencyKey);
         
-        if (event.eventType === 'ALLOCATION_ADJUST_FAILED') {
-          // If the previous attempt failed at Redis, we need to re-attempt the Redis update now
-          // (assuming the PG commit for the failure is already there, we might need a new PG event,
-          // but since this route currently re-attempts from scratch, we should let it proceed or handle it)
-          // Actually, if it failed before, idempotency shouldn't return 200.
-          // Since the user asked: "detect the matching ALLOCATION_ADJUST_FAILED event and re-attempt the Redis update / return the previous 422 or 503 result."
-          
-          if (event.metadata && typeof event.metadata === 'object' && 'error' in event.metadata) {
-            const errMessage = (event.metadata as any).error;
+        // Search for a matching failure event in pg since it doesn't share the same idempotency_key value
+        const [failureEvent] = await db.select().from(quotaEvents).where(sql`${quotaEvents.orgId} = ${org.id} AND ${quotaEvents.eventType} = 'ALLOCATION_ADJUST_FAILED' AND ${quotaEvents.metadata}->>'originalIdempotencyKey' = ${idempotencyKey}`).limit(1);
+
+        if (failureEvent) {
+          if (failureEvent.metadata && typeof failureEvent.metadata === 'object' && 'error' in failureEvent.metadata) {
+            const errMessage = (failureEvent.metadata as any).error;
             if (errMessage && errMessage.includes('RESERVED_EXCEEDS_TOTAL')) {
               return reply.status(422).send({ success: false, error: { code: 'ALLOCATION_BELOW_COMMITTED_QUOTA', message: 'Allocation update would make available quota negative (rejected by Lua)' } });
             }
@@ -107,7 +104,7 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
         }
         
         const currentAvailable = await redis.get(`quota:pool:${org.id}:available`);
-        return reply.send({ success: true, data: { quotaAllocated: event.amount, available: parseInt(currentAvailable || '0', 10) } });
+        return reply.send({ success: true, data: { quotaAllocated: primaryEvent.amount, available: parseInt(currentAvailable || '0', 10) } });
       }
       throw err;
     }
