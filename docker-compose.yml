@@ -22,7 +22,7 @@ services:
     container_name: rate-limiter-redis
     ports:
       - "6380:6379"
-    command: redis-server --maxmemory 256mb --maxmemory-policy volatile-ttl
+    command: redis-server --maxmemory 256mb --maxmemory-policy noeviction
     volumes:
       - redisdata:/data
     healthcheck:

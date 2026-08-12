@@ -21,10 +21,10 @@ export function bootstrap() {
     throw new Error(`Bootstrap failed with status ${res.status}`);
   }
   const data = JSON.parse(res.body);
-  
-  const apiKey = data?.data?.apiKey || data?.apiKey;
-  const orgId = data?.data?.organization?.id || data?.organization?.id || data?.orgId;
-  const serviceId = data?.data?.service?.id || data?.service?.id || data?.serviceId;
+  const d = data.data || data;
+  const apiKey = d.apiKey;
+  const orgId = d.organization ? d.organization.id : d.orgId;
+  const serviceId = d.service ? d.service.id : d.serviceId;
   
   if (!apiKey || !orgId || !serviceId) {
     throw new Error("Bootstrap failed: Missing required fields in response");

@@ -111,7 +111,8 @@ RATE_LIMIT_ALGORITHM=token_bucket k6 run benchmarks/algorithm-comparison.js
 
 | Benchmark                 | Date     | p50     | p95     | p99     | Throughput | Notes |
 | ------------------------- | -------- | ------- | ------- | ------- | ---------- | ----- |
-| rate-limit-baseline       | Aug 2026 | 20.1ms  | 25.3ms  | 30.1ms  | ~2000 req/s| Baseline latency |
+| rate-limit-baseline       | Aug 2026 | 18.2ms  | 36.7ms  | 43.5ms  | ~2700 req/s| Sau tối ưu L1 Cache & Lua (Windows Docker) |
+| rate-limit-baseline (WSL) | Aug 2026 | 14.4ms  | 31.0ms  | ~40.0ms | ~3225 req/s| Môi trường WSL2 Linux Native (Max CPU) |
 | algorithm-comparison (SW) | Aug 2026 | 21.2ms  | 31.4ms  | 39.0ms  | 2222 req/s | Fast sliding window logic |
 | algorithm-comparison (TB) | Aug 2026 | 24.5ms  | 45.8ms  | 56.9ms  | 1848 req/s | Lua time math overhead |
 | quota-trading-load        | Aug 2026 | 28.1ms  | 40.5ms  | 45.2ms  | ~1500 req/s| Concurrent lease churning |
