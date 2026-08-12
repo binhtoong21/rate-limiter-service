@@ -31,6 +31,7 @@ declare module 'ioredis' {
       poolAvailableKey: string,
       poolReservedKey: string,
       poolLoanedOutKey: string,
+      poolReceivedKey: string,
       newTotalAmount: string
     ): Promise<string>;
     

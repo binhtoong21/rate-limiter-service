@@ -19,8 +19,8 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     const { slug } = request.params;
     const { amount } = request.body;
 
-    if (typeof amount !== 'number' || amount < 0) {
-      return reply.status(400).send({ success: false, error: { code: 'BAD_REQUEST', message: 'Amount must be a non-negative number' } });
+    if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0) {
+      return reply.status(400).send({ success: false, error: { code: 'BAD_REQUEST', message: 'Amount must be a non-negative safe integer' } });
     }
 
     const idempotencyKey = request.headers['x-idempotency-key'] as string | undefined;
@@ -56,12 +56,14 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
 
     const reservedRaw = await redis.get(`quota:pool:${org.id}:reserved`);
     const loanedOutRaw = await redis.get(`quota:pool:${org.id}:loaned_out`);
+    const receivedRaw = await redis.get(`quota:pool:${org.id}:received`);
     const reserved = parseInt(reservedRaw || '0', 10);
     const loanedOut = parseInt(loanedOutRaw || '0', 10);
-    const balanceAfterEstimate = amount - reserved - loanedOut;
+    const received = parseInt(receivedRaw || '0', 10);
+    const balanceAfterEstimate = amount - reserved - loanedOut + received;
 
     if (balanceAfterEstimate < 0) {
-      return reply.status(422).send({ success: false, error: { code: 'UNPROCESSABLE_ENTITY', message: 'Allocation update would make available quota negative' } });
+      return reply.status(422).send({ success: false, error: { code: 'ALLOCATION_BELOW_COMMITTED_QUOTA', message: 'Allocation update would make available quota negative' } });
     }
 
     let returnedAmount: string = "0";
@@ -95,13 +97,28 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
 
     // 3. Redis Lua to update pool atomically (total & available)
     // Execute after PG commit so we don't end up with Redis updated but PG rollbacked
-    returnedAmount = await redis.setQuotaPool(
-      `quota:pool:${org.id}:total`,
-      `quota:pool:${org.id}:available`,
-      `quota:pool:${org.id}:reserved`,
-      `quota:pool:${org.id}:loaned_out`,
-      amount.toString()
-    );
+    try {
+      returnedAmount = await redis.setQuotaPool(
+        `quota:pool:${org.id}:total`,
+        `quota:pool:${org.id}:available`,
+        `quota:pool:${org.id}:reserved`,
+        `quota:pool:${org.id}:loaned_out`,
+        `quota:pool:${org.id}:received`,
+        amount.toString()
+      );
+    } catch (err: any) {
+      await db.insert(quotaEvents).values({
+        eventType: 'ALLOCATION_ADJUST_FAILED',
+        orgId: org.id,
+        amount,
+        balanceAfter: balanceAfterEstimate,
+        idempotencyKey: idempotencyKey ? `${idempotencyKey}:fail` : undefined
+      });
+      if (err.message && err.message.includes('RESERVED_EXCEEDS_TOTAL')) {
+        return reply.status(422).send({ success: false, error: { code: 'ALLOCATION_BELOW_COMMITTED_QUOTA', message: 'Allocation update would make available quota negative (rejected by Lua)' } });
+      }
+      throw err;
+    }
 
     if (idempotencyKey && eventRecordId) {
       await idempotencyService.mark(idempotencyKey, eventRecordId, fingerprint);

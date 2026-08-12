@@ -44,6 +44,7 @@ export const quotaEventTypeEnum = pgEnum("quota_event_type", [
   'LOAN_EXPIRE',
   'LOAN_CANCEL',
   'ALLOCATION_ADJUST',
+  'ALLOCATION_ADJUST_FAILED',
   'RECONCILIATION_CORRECTION',
   'LEASE_CLAIM_FAILED',
   'LEASE_RELEASE_FAILED',
