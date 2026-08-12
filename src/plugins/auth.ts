@@ -5,8 +5,15 @@ import { db } from '../db';
 import { apiKeys, services, organizations } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { redis } from '../redis';
+import { LRUCache } from 'lru-cache';
+import { authSingleFlight } from '../utils/single-flight';
 
 import { authCheckDuration } from './metrics';
+
+const l1Cache = new LRUCache<string, AuthContext>({
+  max: 10000,
+  ttl: 10000, // 10 seconds TTL for short bounded staleness
+});
 
 export interface AuthContext {
   serviceId: string;
@@ -51,11 +58,21 @@ export const authPlugin = fp(async (fastify, opts) => {
     const keyHash = AuthService.hashApiKey(apiKey);
     const cacheKey = `apikey:${keyHash}`;
 
+    // 1. Try L1 Local Cache (In-Memory)
+    const l1Cached = l1Cache.get(cacheKey);
+    if (l1Cached) {
+      request.auth = l1Cached;
+      timer();
+      return;
+    }
+
     try {
-      // 1. Try L1/L2 basic cache (Redis) with fast failure
+      // 2. Try L2 Cache (Redis)
       const cached = await redis.get(cacheKey);
       if (cached) {
-        request.auth = JSON.parse(cached);
+        const authContext = JSON.parse(cached) as AuthContext;
+        l1Cache.set(cacheKey, authContext);
+        request.auth = authContext;
         timer();
         return;
       }
@@ -64,47 +81,59 @@ export const authPlugin = fp(async (fastify, opts) => {
       request.log.warn('Redis cache failed during auth. Falling back to DB.');
     }
 
-    // 2. Fallback to DB
+    // 3. Fallback to DB (Protected by SingleFlight coalescing)
     try {
-      const [record] = await db
-        .select({
-          serviceId: services.id,
-          orgId: organizations.id,
-          failOpen: organizations.failOpen,
-          status: apiKeys.status,
-          isAdmin: services.isAdmin,
-        })
-        .from(apiKeys)
-        .innerJoin(services, eq(apiKeys.serviceId, services.id))
-        .innerJoin(organizations, eq(services.orgId, organizations.id))
-        .where(eq(apiKeys.keyHash, keyHash))
-        .limit(1);
+      const authContext = await authSingleFlight.do(cacheKey, async () => {
+        const [record] = await db
+          .select({
+            serviceId: services.id,
+            orgId: organizations.id,
+            failOpen: organizations.failOpen,
+            status: apiKeys.status,
+            isAdmin: services.isAdmin,
+          })
+          .from(apiKeys)
+          .innerJoin(services, eq(apiKeys.serviceId, services.id))
+          .innerJoin(organizations, eq(services.orgId, organizations.id))
+          .where(eq(apiKeys.keyHash, keyHash))
+          .limit(1);
 
-      if (!record || record.status !== 'active') {
-        timer();
-        return reply.status(401).send({ success: false, error: { code: 'INVALID_API_KEY', message: 'Invalid or revoked API Key' } });
-      }
+        if (!record || record.status !== 'active') {
+          throw { statusCode: 401, code: 'INVALID_API_KEY', message: 'Invalid or revoked API Key' };
+        }
 
-      const authContext: AuthContext = {
-        serviceId: record.serviceId,
-        orgId: record.orgId,
-        failOpen: record.failOpen,
-        isAdmin: record.isAdmin,
-      };
+        const ctx: AuthContext = {
+          serviceId: record.serviceId,
+          orgId: record.orgId,
+          failOpen: record.failOpen,
+          isAdmin: record.isAdmin,
+        };
+
+        return ctx;
+      });
 
       request.auth = authContext;
 
-      // 3. Save back to Redis cache (Increased TTL to 300s to avoid thundering herd)
-      // IMPORTANT: Any future /api-keys/:hash revoke route MUST call redis.del(cacheKey)
+      // Save to L1 Cache
+      l1Cache.set(cacheKey, authContext);
+
+      // Save back to Redis cache
       try {
         await redis.set(cacheKey, JSON.stringify(authContext), 'EX', 300); // 300 seconds TTL
       } catch (error) {
         request.log.warn('Failed to save auth context to Redis');
       }
+      
       timer();
-    } catch (error) {
+    } catch (error: any) {
+      timer();
+      if (error.message === 'SINGLEFLIGHT_TOO_MANY_WAITERS') {
+        return reply.status(429).send({ success: false, error: { code: 'TOO_MANY_REQUESTS', message: 'Too many concurrent requests, please try again' } });
+      }
+      if (error.statusCode) {
+        return reply.status(error.statusCode).send({ success: false, error: { code: error.code, message: error.message } });
+      }
       request.log.error({ err: error }, 'Database error during auth');
-      timer();
       return reply.status(500).send({ success: false, error: { code: 'INTERNAL_SERVER_ERROR', message: 'Internal Server Error' } });
     }
   });
