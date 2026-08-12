@@ -71,6 +71,13 @@
       "when": 1786549233689,
       "tag": "0009_cool_sheva_callister",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786549300000,
+      "tag": "0010_update_amount_constraint",
+      "breakpoints": true
     }
   ]
 }

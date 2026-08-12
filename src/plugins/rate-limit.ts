@@ -96,8 +96,11 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
           reply.header('Retry-After', Math.ceil((currentWindowStart + windowSizeMs - now) / 1000));
         }
         return reply.status(429).send({
-          error: 'Too Many Requests',
-          message: 'Rate limit exceeded',
+          success: false,
+          error: {
+            code: 'TOO_MANY_REQUESTS',
+            message: 'Rate limit exceeded',
+          }
         });
       }
     } catch (err) {
@@ -113,15 +116,21 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
         reply.header('X-Limiter-Fallback', 'fail-closed');
         reply.header('Retry-After', 30);
         return reply.status(429).send({
-          error: 'Too Many Requests',
-          message: 'Rate limiter degraded and organization is fail-closed',
+          success: false,
+          error: {
+            code: 'TOO_MANY_REQUESTS',
+            message: 'Rate limiter degraded and organization is fail-closed',
+          }
         });
       } else {
         reply.header('X-Limiter-Fallback', 'fail-closed');
         reply.header('Retry-After', 30);
         return reply.status(503).send({
-          error: 'Service Unavailable',
-          message: 'Rate limiter degraded and org config is unknown',
+          success: false,
+          error: {
+            code: 'SERVICE_UNAVAILABLE',
+            message: 'Rate limiter degraded and org config is unknown',
+          }
         });
       }
     }

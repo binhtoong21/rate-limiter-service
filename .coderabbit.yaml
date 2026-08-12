@@ -29,7 +29,7 @@ reviews:
         3. If Lua fails → INSERT *_FAILED event into PostgreSQL
         Never write to Redis before PostgreSQL. PostgreSQL is ground truth.
 
-    - path: "src/routes/**"
+    - path: "src/{routes,plugins}/**"
       instructions: |
         Check that mutation endpoints creating quota_events require
         X-Idempotency-Key header. Verify API response format according to docs/06-api-design.md:

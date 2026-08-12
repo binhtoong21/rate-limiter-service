@@ -38,14 +38,17 @@ export default async function (fastify: FastifyInstance) {
       });
 
       return reply.status(201).send({
-        message: 'Bootstrap successful',
-        organization: org,
-        service: service,
-        apiKey: apiKey // Only time it is returned in plain text!
+        success: true,
+        data: {
+          message: 'Bootstrap successful',
+          organization: org,
+          service: service,
+          apiKey: apiKey // Only time it is returned in plain text!
+        }
       });
     } catch (err) {
       request.log.error({ err }, 'Failed to bootstrap data');
-      return reply.status(500).send({ error: 'Bootstrap failed' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_SERVER_ERROR', message: 'Bootstrap failed' } });
     }
   });
 }

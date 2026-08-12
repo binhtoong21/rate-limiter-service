@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { buildApp } from '../src/app';
 import { FastifyInstance } from 'fastify';
+import { db } from '../src/db';
+import { apiKeys, organizations, services } from '../src/db/schema';
+import { AuthService } from '../src/services/auth.service';
 
 describe('API Contract Tests', () => {
   let app: FastifyInstance;
@@ -29,7 +32,7 @@ describe('API Contract Tests', () => {
     expect(body).toEqual({
       success: false,
       error: {
-        code: 'UNAUTHORIZED',
+        code: 'MISSING_API_KEY',
         message: 'Missing API Key'
       }
     });
@@ -47,7 +50,7 @@ describe('API Contract Tests', () => {
     expect(body).toEqual({
       success: false,
       error: {
-        code: 'UNAUTHORIZED',
+        code: 'INVALID_API_KEY',
         message: 'Invalid API Key format'
       }
     });
@@ -66,7 +69,39 @@ describe('API Contract Tests', () => {
       success: false,
       error: {
         code: 'INVALID_API_KEY',
-        message: 'Invalid or revoked API Key'
+        message: 'Invalid API Key'
+      }
+    });
+  });
+
+  it('should return 401 API_KEY_REVOKED for revoked key', async () => {
+    // Insert a revoked key for this test
+    const { apiKey, keyHash } = AuthService.generateApiKey('pk_test');
+    
+    // We need an org and service first, or we can just bootstrap them
+    const [org] = await db.insert(organizations).values({ name: 'Test Org', slug: `test-org-${Date.now()}` }).returning();
+    const [service] = await db.insert(services).values({ orgId: org.id, name: 'Test Service' }).returning();
+    
+    await db.insert(apiKeys).values({
+      serviceId: service.id,
+      keyHash,
+      keyPrefix: 'pk_test_1234',
+      status: 'revoked'
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/orgs/some-slug/quota/pool',
+      headers: { 'x-api-key': apiKey }
+    });
+
+    expect(res.statusCode).toBe(401);
+    const body = JSON.parse(res.payload);
+    expect(body).toEqual({
+      success: false,
+      error: {
+        code: 'API_KEY_REVOKED',
+        message: 'API Key revoked'
       }
     });
   });
