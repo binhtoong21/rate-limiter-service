@@ -112,12 +112,13 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
         orgId: org.id,
         amount,
         balanceAfter: balanceAfterEstimate,
-        idempotencyKey: idempotencyKey ? `${idempotencyKey}:fail` : undefined
+        idempotencyKey: undefined, // Don't overflow the unique constraint with ':fail'
+        metadata: { originalIdempotencyKey: idempotencyKey, error: err.message }
       });
       if (err.message && err.message.includes('RESERVED_EXCEEDS_TOTAL')) {
         return reply.status(422).send({ success: false, error: { code: 'ALLOCATION_BELOW_COMMITTED_QUOTA', message: 'Allocation update would make available quota negative (rejected by Lua)' } });
       }
-      throw err;
+      return reply.status(503).send({ success: false, error: { code: 'REDIS_UNAVAILABLE', message: 'Redis is unavailable or returned an error' } });
     }
 
     if (idempotencyKey && eventRecordId) {
