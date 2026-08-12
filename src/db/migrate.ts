@@ -7,7 +7,10 @@ import 'dotenv/config';
 // Use port 5433 to match docker-compose mapping for localhost
 const connectionString = process.env.DATABASE_URL || 'postgres://root:rootpassword@localhost:5433/rate_limiter';
 
-const migrationClient = postgres(connectionString, { max: 1 });
+const migrationClient = postgres(connectionString, { 
+  max: 1, 
+  connection: { statement_timeout: 0 } // Disable timeout for long migrations
+});
 
 async function main() {
   console.log('Starting migration...');
