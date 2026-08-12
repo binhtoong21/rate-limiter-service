@@ -35,7 +35,7 @@ export class SingleFlight {
       this.inFlight.delete(key);
     });
 
-    this.inFlight.set(key, { promise: primaryPromise, waiterCount: 1 });
+    this.inFlight.set(key, { promise: primaryPromise, waiterCount: 0 });
     return this.withTimeoutAndSignal(primaryPromise, this.timeoutMs, signal);
   }
 

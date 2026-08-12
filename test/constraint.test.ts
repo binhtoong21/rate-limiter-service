@@ -18,8 +18,11 @@ describe('Data Integrity - balance_after Constraint', () => {
   });
 
   afterAll(async () => {
-    await db.delete(quotaEvents).where(eq(quotaEvents.orgId, orgId));
-    await db.delete(organizations).where(eq(organizations.id, orgId));
+    // Cannot delete from quotaEvents (append-only), so test DB should be recreated for full isolation.
+    // We only clean up the organization. The constraints on orgId will prevent deleting org
+    // unless we cascade or just leave it since it's a test DB.
+    // For now, since quotaEvents has a foreign key to org, we cannot delete org either without deleting events.
+    // So we just leave the data in the test DB. It uses unique slugs.
   });
 
   it('should allow inserting an event if balance_after >= 0', async () => {
@@ -37,12 +40,14 @@ describe('Data Integrity - balance_after Constraint', () => {
 
   it('should throw constraint error if balance_after < 0', async () => {
     await expect(
-      db.insert(quotaEvents).values({
-        orgId,
-        eventType: 'ALLOCATION_ADJUST',
-        amount: -500,
-        balanceAfter: -100, // Invalid
-        idempotencyKey: randomUUID()
+      db.transaction(async (tx) => {
+        await tx.insert(quotaEvents).values({
+          orgId,
+          eventType: 'ALLOCATION_ADJUST',
+          amount: 500, // Valid amount
+          balanceAfter: -100, // Invalid balance_after
+          idempotencyKey: randomUUID()
+        });
       })
     ).rejects.toThrow(/Failed query/);
   });

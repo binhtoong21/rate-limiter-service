@@ -5,8 +5,17 @@ import * as schema from './schema';
 const connectionString = process.env.DATABASE_URL || 'postgres://root:rootpassword@localhost:5433/rate_limiter';
 
 // For queries
-const maxPool = process.env.DB_POOL_MAX ? parseInt(process.env.DB_POOL_MAX, 10) : 10;
-const statementTimeout = process.env.DB_STATEMENT_TIMEOUT ? parseInt(process.env.DB_STATEMENT_TIMEOUT, 10) : 3000;
+function getPositiveSafeInt(val: string | undefined, defaultVal: number): number {
+  if (!val) return defaultVal;
+  const num = Number(val);
+  if (!Number.isSafeInteger(num) || num <= 0 || val.trim() !== val || val.includes('.')) {
+    throw new Error(`Invalid positive integer for DB connection setting: ${val}`);
+  }
+  return num;
+}
+
+const maxPool = getPositiveSafeInt(process.env.DB_POOL_MAX, 10);
+const statementTimeout = getPositiveSafeInt(process.env.DB_STATEMENT_TIMEOUT, 3000);
 
 const queryClient = postgres(connectionString, { 
   max: maxPool,

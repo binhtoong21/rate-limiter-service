@@ -32,9 +32,10 @@ reviews:
     - path: "src/routes/**"
       instructions: |
         Check that mutation endpoints creating quota_events require
-        X-Idempotency-Key header. Verify API response format:
-        - Success: { data: {}, message?: string }
-        - Error: { error: "SCREAMING_SNAKE_CASE", message: string }
+        X-Idempotency-Key header. Verify API response format according to docs/06-api-design.md:
+        - Success: { success: true, data, meta? }
+        - Error: { success: false, error: { code: "SCREAMING_SNAKE_CASE", message: string, details?: any }, meta? }
+        Exceptions: /metrics returns raw Prometheus text, /health returns system-specific format.
 
     - path: "src/workers/**"
       instructions: |

@@ -24,6 +24,9 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const idempotencyKey = request.headers['x-idempotency-key'] as string | undefined;
+    if (!idempotencyKey || idempotencyKey.trim() === '') {
+      return reply.status(400).send({ success: false, error: { code: 'BAD_REQUEST', message: 'Missing or empty X-Idempotency-Key header' } });
+    }
 
     // Find org by slug
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
@@ -52,8 +55,14 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const reservedRaw = await redis.get(`quota:pool:${org.id}:reserved`);
+    const loanedOutRaw = await redis.get(`quota:pool:${org.id}:loaned_out`);
     const reserved = parseInt(reservedRaw || '0', 10);
-    const balanceAfterEstimate = amount - reserved;
+    const loanedOut = parseInt(loanedOutRaw || '0', 10);
+    const balanceAfterEstimate = amount - reserved - loanedOut;
+
+    if (balanceAfterEstimate < 0) {
+      return reply.status(422).send({ success: false, error: { code: 'UNPROCESSABLE_ENTITY', message: 'Allocation update would make available quota negative' } });
+    }
 
     let returnedAmount: string = "0";
     let eventRecordId: string | undefined;
