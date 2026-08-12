@@ -117,6 +117,7 @@ export const quotaEvents = pgTable("quota_events", {
     tradingEventsIdx: index("idx_quota_events_trading")
       .on(table.orgId, table.createdAt.desc())
       .where(sql`${table.eventType} IN ('TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED', 'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL')`),
-    amountPositiveCheck: check('quota_events_amount_check', sql`${table.amount} > 0`)
+    amountPositiveCheck: check('quota_events_amount_check', sql`${table.amount} > 0`),
+    balancePositiveCheck: check('quota_events_balance_check', sql`${table.balanceAfter} >= 0`)
   };
 });

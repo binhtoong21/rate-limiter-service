@@ -11,6 +11,7 @@
     "build": "tsc",
     "start": "cross-env NODE_ENV=production node dist/server.js",
     "db:push": "drizzle-kit push",
+    "db:migrate": "tsx src/db/migrate.ts",
     "db:generate": "drizzle-kit generate",
     "test": "vitest"
   },

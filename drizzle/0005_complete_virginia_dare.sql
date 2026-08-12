@@ -22,4 +22,6 @@ CREATE INDEX "idx_loans_lender_active" ON "loans" USING btree ("lender_org_id","
 CREATE INDEX "idx_loans_borrower_active" ON "loans" USING btree ("borrower_org_id","created_at" DESC NULLS LAST) WHERE "loans"."status" = 'active';--> statement-breakpoint
 CREATE INDEX "idx_loans_expiry_scan" ON "loans" USING btree ("expires_at") WHERE "loans"."status" = 'active';--> statement-breakpoint
 ALTER TABLE "quota_events" ADD CONSTRAINT "quota_events_loan_id_loans_id_fk" FOREIGN KEY ("loan_id") REFERENCES "public"."loans"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-CREATE INDEX "idx_quota_events_trading" ON "quota_events" USING btree ("org_id","created_at" DESC NULLS LAST) WHERE "quota_events"."event_type" IN ('TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED', 'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL');
+COMMIT;--> statement-breakpoint
+CREATE INDEX "idx_quota_events_trading" ON "quota_events" USING btree ("org_id","created_at" DESC NULLS LAST) WHERE "quota_events"."event_type" IN ('TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED', 'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL');--> statement-breakpoint
+BEGIN;
