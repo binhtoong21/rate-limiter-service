@@ -83,9 +83,13 @@ export const authPlugin = fp(async (fastify, opts) => {
     }
 
     // 3. Fallback to DB (Protected by SingleFlight coalescing)
+    const abortController = new AbortController();
+    const onClose = () => abortController.abort();
+    request.raw.on('close', onClose);
+
     try {
-      authDbFallbackTotal.inc();
       const authContext = await authSingleFlight.do(cacheKey, async () => {
+        authDbFallbackTotal.inc();
         const [record] = await db
           .select({
             serviceId: services.id,
@@ -112,8 +116,9 @@ export const authPlugin = fp(async (fastify, opts) => {
         };
 
         return ctx;
-      });
+      }, abortController.signal);
 
+      request.raw.removeListener('close', onClose);
       request.auth = authContext;
 
       // Save to L1 Cache
@@ -128,10 +133,15 @@ export const authPlugin = fp(async (fastify, opts) => {
       
       timer();
     } catch (error: any) {
+      request.raw.removeListener('close', onClose);
       timer();
       if (error.message === 'SINGLEFLIGHT_TOO_MANY_WAITERS') {
         authSingleflightRejectedTotal.inc();
         return reply.status(429).send({ success: false, error: { code: 'TOO_MANY_REQUESTS', message: 'Too many concurrent requests, please try again' } });
+      }
+      if (error.message === 'SINGLEFLIGHT_TIMEOUT' || error.message === 'SINGLEFLIGHT_ABORTED') {
+        // If aborted by disconnect, fastify handles it. If timeout, return 503.
+        return reply.status(503).send({ success: false, error: { code: 'SERVICE_UNAVAILABLE', message: 'Auth service timeout' } });
       }
       if (error.statusCode) {
         return reply.status(error.statusCode).send({ success: false, error: { code: error.code, message: error.message } });

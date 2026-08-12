@@ -4,9 +4,9 @@ import { bootstrap, getAuthHeaders, BASE_URL } from "./helpers/setup.js";
 
 export const options = {
   stages: [
-    { duration: '10s', target: 50 },  // Ramp up
-    { duration: '30s', target: 100 }, // Steady state
-    { duration: '10s', target: 0 },   // Ramp down
+    { duration: '30s', target: 50 },  // Ramp up
+    { duration: '2m', target: 100 },  // Steady state
+    { duration: '30s', target: 0 },   // Ramp down
   ],
   thresholds: {
     http_req_duration: ["p(95)<5", "p(99)<10"],
