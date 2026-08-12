@@ -13,6 +13,7 @@ import eventsRoutes from './routes/quota/events';
 
 export function buildApp(opts = {}): FastifyInstance {
   const app = fastify({
+    disableRequestLogging: process.env.NODE_ENV === 'test',
     logger: {
       level: process.env.LOG_LEVEL || 'info',
       transport: process.env.NODE_ENV === 'development' ? {
