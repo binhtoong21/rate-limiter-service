@@ -1,7 +1,7 @@
 import { FastifyPluginAsync } from 'fastify';
 import { db } from '../db';
 import { organizations, quotaEvents } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { redis } from '../redis';
 import { idempotencyService } from '../services/idempotency.service';
 
@@ -13,22 +13,25 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
   }>('/:slug/quota', async (request, reply) => {
     // Admin only guard
     if (!request.auth.isAdmin) {
-      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Admin access required' });
+      return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
 
     const { slug } = request.params;
     const { amount } = request.body;
 
-    if (typeof amount !== 'number' || amount < 0) {
-      return reply.status(400).send({ error: 'BAD_REQUEST', message: 'Amount must be a non-negative number' });
+    if (typeof amount !== 'number' || !Number.isSafeInteger(amount) || amount < 0) {
+      return reply.status(400).send({ success: false, error: { code: 'BAD_REQUEST', message: 'Amount must be a non-negative safe integer' } });
     }
 
     const idempotencyKey = request.headers['x-idempotency-key'] as string | undefined;
+    if (!idempotencyKey || idempotencyKey.trim() === '') {
+      return reply.status(400).send({ success: false, error: { code: 'BAD_REQUEST', message: 'Missing or empty X-Idempotency-Key header' } });
+    }
 
     // Find org by slug
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
     if (!org) {
-      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Organization not found' });
+      return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Organization not found' } });
     }
 
     let fingerprint: string | undefined;
@@ -41,19 +44,27 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
           // because it might have changed since the event.
           // However, for pure idempotency, returning the total from the cached event is correct.
           const currentAvailable = await redis.get(`quota:pool:${org.id}:available`);
-          return reply.send({ data: { quotaAllocated: cachedResult.amount, available: parseInt(currentAvailable || '0', 10) } });
+          return reply.send({ success: true, data: { quotaAllocated: cachedResult.amount, available: parseInt(currentAvailable || '0', 10) } });
         }
       } catch (err: any) {
         if (err.message === 'DUPLICATE_IDEMPOTENCY_KEY') {
-          return reply.status(409).send({ error: 'DUPLICATE_IDEMPOTENCY_KEY', message: 'Idempotency key already used for a different request' });
+          return reply.status(409).send({ success: false, error: { code: 'DUPLICATE_IDEMPOTENCY_KEY', message: 'Idempotency key already used for a different request' } });
         }
         throw err;
       }
     }
 
     const reservedRaw = await redis.get(`quota:pool:${org.id}:reserved`);
+    const loanedOutRaw = await redis.get(`quota:pool:${org.id}:loaned_out`);
+    const receivedRaw = await redis.get(`quota:pool:${org.id}:received`);
     const reserved = parseInt(reservedRaw || '0', 10);
-    const balanceAfterEstimate = amount - reserved;
+    const loanedOut = parseInt(loanedOutRaw || '0', 10);
+    const received = parseInt(receivedRaw || '0', 10);
+    const balanceAfterEstimate = amount - reserved - loanedOut + received;
+
+    if (balanceAfterEstimate < 0) {
+      return reply.status(422).send({ success: false, error: { code: 'ALLOCATION_BELOW_COMMITTED_QUOTA', message: 'Allocation update would make available quota negative' } });
+    }
 
     let returnedAmount: string = "0";
     let eventRecordId: string | undefined;
@@ -77,41 +88,72 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
       });
     } catch (err: any) {
       if (err.code === '23505' && idempotencyKey) {
-        const event = await idempotencyService.handleUniqueViolation(idempotencyKey);
+        const primaryEvent = await idempotencyService.handleUniqueViolation(idempotencyKey);
+        
+        // Search for a matching failure event in pg since it doesn't share the same idempotency_key value
+        const [failureEvent] = await db.select().from(quotaEvents).where(sql`${quotaEvents.orgId} = ${org.id} AND ${quotaEvents.eventType} = 'ALLOCATION_ADJUST_FAILED' AND ${quotaEvents.metadata}->>'originalIdempotencyKey' = ${idempotencyKey}`).limit(1);
+
+        if (failureEvent) {
+          if (failureEvent.metadata && typeof failureEvent.metadata === 'object' && 'error' in failureEvent.metadata) {
+            const errMessage = (failureEvent.metadata as any).error;
+            if (errMessage && errMessage.includes('RESERVED_EXCEEDS_TOTAL')) {
+              return reply.status(422).send({ success: false, error: { code: 'ALLOCATION_BELOW_COMMITTED_QUOTA', message: 'Allocation update would make available quota negative (rejected by Lua)' } });
+            }
+          }
+          return reply.status(503).send({ success: false, error: { code: 'REDIS_UNAVAILABLE', message: 'Redis is unavailable or returned an error' } });
+        }
+        
         const currentAvailable = await redis.get(`quota:pool:${org.id}:available`);
-        return reply.send({ data: { quotaAllocated: event.amount, available: parseInt(currentAvailable || '0', 10) } });
+        return reply.send({ success: true, data: { quotaAllocated: primaryEvent.amount, available: parseInt(currentAvailable || '0', 10) } });
       }
       throw err;
     }
 
     // 3. Redis Lua to update pool atomically (total & available)
     // Execute after PG commit so we don't end up with Redis updated but PG rollbacked
-    returnedAmount = await redis.setQuotaPool(
-      `quota:pool:${org.id}:total`,
-      `quota:pool:${org.id}:available`,
-      `quota:pool:${org.id}:reserved`,
-      amount.toString()
-    );
+    try {
+      returnedAmount = await redis.setQuotaPool(
+        `quota:pool:${org.id}:total`,
+        `quota:pool:${org.id}:available`,
+        `quota:pool:${org.id}:reserved`,
+        `quota:pool:${org.id}:loaned_out`,
+        `quota:pool:${org.id}:received`,
+        amount.toString()
+      );
+    } catch (err: any) {
+      await db.insert(quotaEvents).values({
+        eventType: 'ALLOCATION_ADJUST_FAILED',
+        orgId: org.id,
+        amount,
+        balanceAfter: balanceAfterEstimate,
+        idempotencyKey: undefined,
+        metadata: { originalIdempotencyKey: idempotencyKey, error: err.message }
+      });
+      if (err.message && err.message.includes('RESERVED_EXCEEDS_TOTAL')) {
+        return reply.status(422).send({ success: false, error: { code: 'ALLOCATION_BELOW_COMMITTED_QUOTA', message: 'Allocation update would make available quota negative (rejected by Lua)' } });
+      }
+      return reply.status(503).send({ success: false, error: { code: 'REDIS_UNAVAILABLE', message: 'Redis is unavailable or returned an error' } });
+    }
 
     if (idempotencyKey && eventRecordId) {
       await idempotencyService.mark(idempotencyKey, eventRecordId, fingerprint);
     }
 
-    return reply.send({ data: { quotaAllocated: amount, available: parseInt(returnedAmount, 10) } });
+    return reply.send({ success: true, data: { quotaAllocated: amount, available: parseInt(returnedAmount, 10) } });
   });
 
   fastify.get<{
     Params: { slug: string };
   }>('/:slug/quota/pool', async (request, reply) => {
     if (!request.auth.isAdmin) {
-      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Admin access required' });
+      return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
 
     const { slug } = request.params;
 
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
     if (!org) {
-      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Organization not found' });
+      return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Organization not found' } });
     }
 
     const pipeline = redis.pipeline();
@@ -124,7 +166,7 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     const results = await pipeline.exec();
 
     if (!results) {
-      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis pipeline failed' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Redis pipeline failed' } });
     }
 
     const [totalErr, totalRes] = results[0];
@@ -134,11 +176,10 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     const [availableErr, availableRes] = results[4];
 
     if (totalErr || reservedErr || loanedOutErr || receivedErr || availableErr) {
-      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis read error' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Redis read error' } });
     }
 
-    return reply.send({
-      data: {
+    return reply.send({ success: true, data: {
         orgId: org.id,
         slug: org.slug,
         pool: {

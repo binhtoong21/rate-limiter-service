@@ -11,6 +11,7 @@
     "build": "tsc",
     "start": "cross-env NODE_ENV=production node dist/server.js",
     "db:push": "drizzle-kit push",
+    "db:migrate": "tsx src/db/migrate.ts",
     "db:generate": "drizzle-kit generate",
     "test": "vitest"
   },
@@ -24,6 +25,7 @@
     "fastify": "^5.8.5",
     "fastify-plugin": "^6.0.0",
     "ioredis": "^5.11.1",
+    "lru-cache": "^11.5.2",
     "pg": "^8.22.0",
     "pino": "^10.3.1",
     "postgres": "^3.4.9",

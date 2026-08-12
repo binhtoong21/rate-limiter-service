@@ -43,7 +43,7 @@ export const luaScriptsPlugin = fp(async (fastify, opts) => {
   // Attach wrappers directly to the redis instance
   (redis as any).claimLease = (...args: any[]) => evalShaWithRetry('claimLease', 5, ...args);
   (redis as any).releaseLease = (...args: any[]) => evalShaWithRetry('releaseLease', 5, ...args);
-  (redis as any).setQuotaPool = (...args: any[]) => evalShaWithRetry('setQuotaPool', 3, ...args);
+  (redis as any).setQuotaPool = (...args: any[]) => evalShaWithRetry('setQuotaPool', 5, ...args);
   (redis as any).createLoan = (...args: any[]) => evalShaWithRetry('createLoan', 7, ...args);
   (redis as any).settleLoan = (...args: any[]) => evalShaWithRetry('settleLoan', 7, ...args);
   (redis as any).tokenBucketCheck = (...args: any[]) => evalShaWithRetry('tokenBucketCheck', 2, ...args);

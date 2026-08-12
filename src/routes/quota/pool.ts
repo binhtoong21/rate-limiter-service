@@ -16,11 +16,11 @@ const poolRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       results = await pipeline.exec();
     } catch (err) {
-      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis system failure' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Redis system failure' } });
     }
     
     if (!results) {
-      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis pipeline failed' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Redis pipeline failed' } });
     }
 
     const [totalErr, totalRes] = results[0];
@@ -30,11 +30,10 @@ const poolRoutes: FastifyPluginAsync = async (fastify) => {
     const [availableErr, availableRes] = results[4];
 
     if (totalErr || reservedErr || loanedOutErr || receivedErr || availableErr) {
-      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis read error' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Redis read error' } });
     }
 
-    return reply.send({
-      data: {
+    return reply.send({ success: true, data: {
         total: parseInt((totalRes as string) || '0', 10),
         reserved: parseInt((reservedRes as string) || '0', 10),
         loanedOut: parseInt((loanedOutRes as string) || '0', 10),
