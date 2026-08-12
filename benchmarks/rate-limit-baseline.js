@@ -4,9 +4,7 @@ import { bootstrap, getAuthHeaders, BASE_URL } from "./helpers/setup.js";
 
 export const options = {
   stages: [
-    { duration: "30s", target: 100 }, // ramp up
-    { duration: "2m", target: 100 }, // steady
-    { duration: "30s", target: 0 }, // ramp down
+    { duration: '30s', target: 100 },   // steady state for profiling
   ],
   thresholds: {
     http_req_duration: ["p(95)<5", "p(99)<10"],

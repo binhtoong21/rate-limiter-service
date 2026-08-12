@@ -3,6 +3,7 @@ local pool_available   = KEYS[1]  -- quota:pool:{org_id}:available
 local pool_reserved    = KEYS[2]  -- quota:pool:{org_id}:reserved
 local lease_hash       = KEYS[3]  -- quota:lease:{lease_id}
 local lease_active_set = KEYS[4]  -- quota:lease:active:{org_id}
+local lease_active_sum = KEYS[5]  -- quota:lease:active_sum:{org_id}
 
 local lease_id    = ARGV[1]
 local org_id      = ARGV[2]
@@ -40,5 +41,7 @@ redis.call('EXPIRE', lease_hash, ttl + 60)  -- +60s buffer
 
 -- Track in active set
 redis.call('SADD', lease_active_set, lease_id)
+-- Track active sum for O(1) effective limit computation
+redis.call('INCRBY', lease_active_sum, amount)
 
 return redis.status_reply('OK')

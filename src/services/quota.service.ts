@@ -125,6 +125,7 @@ export class QuotaService {
             `quota:pool:${orgId}:reserved`,
             `quota:lease:${newLease.id}`,
             `quota:lease:active:${orgId}`,
+            `quota:lease:active_sum:${orgId}`,
             newLease.id,
             orgId,
             serviceId,
@@ -246,14 +247,19 @@ export class QuotaService {
       });
 
       // 3B: Redis Lua
-      await redis.releaseLease(
+      const status = await redis.releaseLease(
         `quota:pool:${existingLease.orgId}:available`,
         `quota:pool:${existingLease.orgId}:reserved`,
         `quota:lease:${leaseId}`,
         `quota:lease:active:${existingLease.orgId}`,
+        `quota:lease:active_sum:${existingLease.orgId}`,
         leaseId,
         existingLease.amount.toString()
       );
+      
+      if (status === 'OK_UNDERFLOW') {
+        this.fastify.log.warn({ orgId: existingLease.orgId, leaseId }, 'Lease active_sum underflow detected during release');
+      }
     });
 
     quotaOperationTotal.inc({ type: 'release_lease', status: 'success' });

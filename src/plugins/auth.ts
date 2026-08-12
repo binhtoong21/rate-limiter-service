@@ -6,6 +6,8 @@ import { apiKeys, services, organizations } from '../db/schema';
 import { eq, and } from 'drizzle-orm';
 import { redis } from '../redis';
 
+import { authCheckDuration } from './metrics';
+
 export interface AuthContext {
   serviceId: string;
   orgId: string;
@@ -23,18 +25,26 @@ export const authPlugin = fp(async (fastify, opts) => {
   fastify.decorateRequest('auth', null as unknown as AuthContext);
 
   fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    // Skip auth for health and dev routes
-    if (request.url.startsWith('/health') || request.url.startsWith('/dev/')) {
+    // Skip auth for health, metrics, and dev routes
+    if (
+      request.url.startsWith('/health') || 
+      request.url.startsWith('/metrics') || 
+      request.url.startsWith('/dev/')
+    ) {
       return;
     }
+
+    const timer = authCheckDuration.startTimer();
 
     const apiKey = request.headers['x-api-key'] as string;
 
     if (!apiKey) {
+      timer();
       return reply.status(401).send({ error: 'Missing X-API-Key header' });
     }
 
     if (!AuthService.isValidFormat(apiKey)) {
+      timer();
       return reply.status(401).send({ error: 'Invalid API Key format' });
     }
 
@@ -46,6 +56,7 @@ export const authPlugin = fp(async (fastify, opts) => {
       const cached = await redis.get(cacheKey);
       if (cached) {
         request.auth = JSON.parse(cached);
+        timer();
         return;
       }
     } catch (error) {
@@ -70,6 +81,7 @@ export const authPlugin = fp(async (fastify, opts) => {
         .limit(1);
 
       if (!record || record.status !== 'active') {
+        timer();
         return reply.status(401).send({ error: 'Invalid or revoked API Key' });
       }
 
@@ -82,14 +94,17 @@ export const authPlugin = fp(async (fastify, opts) => {
 
       request.auth = authContext;
 
-      // 3. Save back to Redis cache (basic TTL strategy for Phase 1)
+      // 3. Save back to Redis cache (Increased TTL to 300s to avoid thundering herd)
+      // IMPORTANT: Any future /api-keys/:hash revoke route MUST call redis.del(cacheKey)
       try {
-        await redis.set(cacheKey, JSON.stringify(authContext), 'EX', 10); // 10 seconds TTL
+        await redis.set(cacheKey, JSON.stringify(authContext), 'EX', 300); // 300 seconds TTL
       } catch (error) {
         request.log.warn('Failed to save auth context to Redis');
       }
+      timer();
     } catch (error) {
       request.log.error({ err: error }, 'Database error during auth');
+      timer();
       return reply.status(500).send({ error: 'Internal Server Error' });
     }
   });

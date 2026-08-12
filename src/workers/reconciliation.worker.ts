@@ -97,6 +97,7 @@ export const startReconciliationWorker = async () => {
         const currentReserved = parseInt(await defaultRedis.get(`quota:pool:${orgId}:reserved`) || '0', 10);
         const currentLoanedOut = parseInt(await defaultRedis.get(`quota:pool:${orgId}:loaned_out`) || '0', 10);
         const currentReceived = parseInt(await defaultRedis.get(`quota:pool:${orgId}:received`) || '0', 10);
+        const currentActiveSum = parseInt(await defaultRedis.get(`quota:lease:active_sum:${orgId}`) || '0', 10);
 
         let drifted = false;
         let driftAmount = 0;
@@ -112,6 +113,10 @@ export const startReconciliationWorker = async () => {
         if (expectedReserved !== currentReserved) {
           drifted = true;
           driftAmount += Math.abs(expectedReserved - currentReserved);
+        }
+        if (expectedReserved !== currentActiveSum) {
+          drifted = true;
+          // Don't add to driftAmount twice since it represents the same underlying discrepancy
         }
         if (expectedLoanedOut !== currentLoanedOut) {
           drifted = true;
@@ -153,6 +158,7 @@ export const startReconciliationWorker = async () => {
           pipeline.set(`quota:pool:${orgId}:total`, expectedTotal.toString());
           pipeline.set(`quota:pool:${orgId}:available`, expectedAvailable.toString());
           pipeline.set(`quota:pool:${orgId}:reserved`, expectedReserved.toString());
+          pipeline.set(`quota:lease:active_sum:${orgId}`, expectedReserved.toString());
           pipeline.set(`quota:pool:${orgId}:loaned_out`, expectedLoanedOut.toString());
           pipeline.set(`quota:pool:${orgId}:received`, expectedReceived.toString());
           

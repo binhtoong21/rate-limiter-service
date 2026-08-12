@@ -10,7 +10,12 @@ const start = async () => {
     app.log.info(`Server listening at http://0.0.0.0:${process.env.PORT || 3000}`);
     
     // Start background workers only after app is successfully listening
-    await startWorkers();
+    if (process.env.ENABLE_WORKERS === 'true') {
+      app.log.info('ENABLE_WORKERS=true, starting background workers...');
+      await startWorkers();
+    } else {
+      app.log.info('ENABLE_WORKERS!=true, background workers disabled in this instance.');
+    }
   } catch (err) {
     app.log.error(err);
     process.exit(1);

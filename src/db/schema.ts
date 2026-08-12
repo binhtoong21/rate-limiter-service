@@ -36,24 +36,24 @@ export const leaseStatusEnum = pgEnum('lease_status', ['active', 'released', 'ex
 export const loanStatusEnum = pgEnum('loan_status', ['active', 'repaid', 'expired', 'cancelled']);
 
 export const quotaEventTypeEnum = pgEnum("quota_event_type", [
-  'ALLOCATION_ADJUST',
   'LEASE_CLAIM',
   'LEASE_RELEASE',
   'LEASE_EXPIRE',
+  'LOAN_CREATE',
+  'LOAN_REPAY',
+  'LOAN_EXPIRE',
+  'LOAN_CANCEL',
+  'ALLOCATION_ADJUST',
+  'RECONCILIATION_CORRECTION',
   'LEASE_CLAIM_FAILED',
   'LEASE_RELEASE_FAILED',
   'TRANSFER_DEBIT',
   'TRANSFER_CREDIT',
   'TRANSFER_FAILED',
-  'LOAN_CREATE',
-  'LOAN_REPAY',
-  'LOAN_CANCEL',
-  'LOAN_EXPIRE',
   'LOAN_CREATE_FAILED',
   'LOAN_REPAY_FAILED',
   'LOAN_CANCEL_FAILED',
-  'LOAN_EXPIRE_FAILED',
-  'RECONCILIATION_CORRECTION'
+  'LOAN_EXPIRE_FAILED'
 ]);
 
 export const leases = pgTable("leases", {

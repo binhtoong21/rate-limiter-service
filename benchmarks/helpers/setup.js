@@ -16,15 +16,15 @@ export function bootstrap() {
     },
   );
 
-  if (res.status !== 200) {
+  if (res.status !== 200 && res.status !== 201) {
     console.log("Bootstrap failed:", res.status, res.body);
     throw new Error(`Bootstrap failed with status ${res.status}`);
   }
   const data = JSON.parse(res.body);
   
   const apiKey = data?.data?.apiKey || data?.apiKey;
-  const orgId = data?.data?.organization?.id || data?.orgId;
-  const serviceId = data?.data?.service?.id || data?.serviceId;
+  const orgId = data?.data?.organization?.id || data?.organization?.id || data?.orgId;
+  const serviceId = data?.data?.service?.id || data?.service?.id || data?.serviceId;
   
   if (!apiKey || !orgId || !serviceId) {
     throw new Error("Bootstrap failed: Missing required fields in response");

@@ -25,6 +25,13 @@ export const rateLimitCheckDuration = new client.Histogram({
   registers: [register],
 });
 
+export const authCheckDuration = new client.Histogram({
+  name: 'auth_check_duration_seconds',
+  help: 'Auth check latency in seconds',
+  buckets: [0.0005, 0.001, 0.002, 0.005, 0.010, 0.025, 0.050],
+  registers: [register],
+});
+
 // --- Quota Pool Metrics (periodic collection) ---
 
 export const quotaPoolAvailable = new client.Gauge({

@@ -9,7 +9,7 @@ let slidingWindowScriptSha: string;
 
 export const rateLimitPlugin = fp(async (fastify, opts) => {
   // Load script on startup
-  const scriptPath = path.join(__dirname, '../redis/scripts/sliding_window_check.lua');
+  const scriptPath = path.join(process.cwd(), 'src/redis/scripts/sliding_window_check.lua');
   const scriptContent = fs.readFileSync(scriptPath, 'utf8');
   
   try {
@@ -25,12 +25,7 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
     const now = Date.now();
     const algorithm = process.env.RATE_LIMIT_ALGORITHM === 'token_bucket' ? 'token_bucket' : 'sliding_window';
     
-    let effectiveLimit = limit;
-    try {
-      effectiveLimit = await redis.getEffectiveLimit(`quota:lease:active:${orgId}`, limit.toString());
-    } catch (err) {
-      request.log.error({ err }, 'Failed to get effective limit. Falling back to default limit.');
-    }
+    let effectiveLimit = limit; // Will be returned by Lua scripts
 
     const timer = rateLimitCheckDuration.startTimer({ algorithm });
 
@@ -40,16 +35,18 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
 
       if (algorithm === 'token_bucket') {
         const tbKey = `rl:tb:${orgId}`;
-        const refillRate = effectiveLimit / (windowSizeMs / 1000); // tokens per second
+        const activeSumKey = `quota:lease:active_sum:${orgId}`;
         
         const result = await (redis as any).tokenBucketCheck(
           tbKey,
-          effectiveLimit.toString(),
-          refillRate.toString(),
+          activeSumKey,
+          limit.toString(),
+          windowSizeMs.toString(),
           now.toString()
-        ) as [number, number];
+        ) as [number, number, number];
 
         allowed = result[0] === 1;
+        effectiveLimit = result[2];
         estimatedCount = effectiveLimit - result[1]; // remaining -> consumed
       } else {
         const currentWindowStart = Math.floor(now / windowSizeMs) * windowSizeMs;
@@ -57,23 +54,26 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
         
         const currentKey = `rl:sw:${orgId}:${currentWindowStart}`;
         const previousKey = `rl:sw:${orgId}:${previousWindowStart}`;
+        const activeSumKey = `quota:lease:active_sum:${orgId}`;
         
         const elapsed = now - currentWindowStart;
         const previousWeight = 1 - (elapsed / windowSizeMs);
 
         const result = await redis.evalsha(
           slidingWindowScriptSha,
-          2, // number of keys
+          3, // number of keys
           currentKey,
           previousKey,
-          effectiveLimit,
+          activeSumKey,
+          limit,
           windowSizeMs,
           now,
           previousWeight
-        ) as [number, number];
+        ) as [number, number, number];
 
         allowed = result[0] === 1;
         estimatedCount = result[1];
+        effectiveLimit = result[2];
         
         reply.header('X-RateLimit-Reset', currentWindowStart + windowSizeMs);
       }

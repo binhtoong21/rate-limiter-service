@@ -8,6 +8,7 @@ declare module 'ioredis' {
       poolReservedKey: string,
       leaseHashKey: string,
       leaseActiveSetKey: string,
+      leaseActiveSumKey: string,
       leaseId: string,
       orgId: string,
       serviceId: string,
@@ -21,15 +22,10 @@ declare module 'ioredis' {
       poolReservedKey: string,
       leaseHashKey: string,
       leaseActiveSetKey: string,
+      leaseActiveSumKey: string,
       leaseId: string,
       amount: string
     ): Promise<string>;
-    
-    getEffectiveLimit(
-      leaseActiveSetKey: string,
-      defaultLimit: string
-    ): Promise<number>;
-    
     setQuotaPool(
       poolTotalKey: string,
       poolAvailableKey: string,

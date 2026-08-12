@@ -21,7 +21,7 @@ export const startLoanExpiryWorker = async () => {
     const expiredLoans = await db
       .select()
       .from(loans)
-      .where(and(eq(loans.status, 'active'), lt(loans.expiresAt, new Date().toISOString())))
+      .where(and(eq(loans.status, 'active'), lt(loans.expiresAt, sql`${new Date().toISOString()}::timestamptz`)))
       .limit(100);
 
     if (expiredLoans.length === 0) {

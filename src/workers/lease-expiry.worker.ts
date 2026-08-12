@@ -21,7 +21,7 @@ export const startLeaseExpiryWorker = async () => {
   const expiredLeases = await db
     .select()
     .from(leases)
-    .where(and(eq(leases.status, 'active'), lt(leases.expiresAt, new Date().toISOString())))
+    .where(and(eq(leases.status, 'active'), lt(leases.expiresAt, sql`${new Date().toISOString()}::timestamptz`)))
     .limit(100);
 
   if (expiredLeases.length === 0) {
@@ -65,14 +65,19 @@ export const startLeaseExpiryWorker = async () => {
 
         // EVALSHA release_lease.lua
         // ⚠️ Redis Lua không tham gia PG transaction, crash recovery applies.
-        await defaultRedis.releaseLease(
+        const status = await defaultRedis.releaseLease(
           `quota:pool:${lease.orgId}:available`,
           `quota:pool:${lease.orgId}:reserved`,
           `quota:lease:${lease.id}`,
           `quota:lease:active:${lease.orgId}`,
+          `quota:lease:active_sum:${lease.orgId}`,
           lease.id,
           lease.amount.toString()
         );
+        
+        if (status === 'OK_UNDERFLOW') {
+          logger.warn({ orgId: lease.orgId, leaseId: lease.id }, 'Lease active_sum underflow detected during expiry');
+        }
       });
       processed++;
     } catch (err) {
