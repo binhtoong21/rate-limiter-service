@@ -32,6 +32,24 @@ export const authCheckDuration = new client.Histogram({
   registers: [register],
 });
 
+export const authL1CacheHitsTotal = new client.Counter({
+  name: 'auth_l1_cache_hits_total',
+  help: 'Total number of auth checks served from L1 Cache',
+  registers: [register],
+});
+
+export const authDbFallbackTotal = new client.Counter({
+  name: 'auth_db_fallback_total',
+  help: 'Total number of auth checks that fell back to DB',
+  registers: [register],
+});
+
+export const authSingleflightRejectedTotal = new client.Counter({
+  name: 'auth_singleflight_rejected_total',
+  help: 'Total number of auth checks rejected due to SingleFlight queue full',
+  registers: [register],
+});
+
 // --- Quota Pool Metrics (periodic collection) ---
 
 export const quotaPoolAvailable = new client.Gauge({

@@ -8,7 +8,7 @@ import { redis } from '../redis';
 import { LRUCache } from 'lru-cache';
 import { authSingleFlight } from '../utils/single-flight';
 
-import { authCheckDuration } from './metrics';
+import { authCheckDuration, authL1CacheHitsTotal, authDbFallbackTotal, authSingleflightRejectedTotal } from './metrics';
 
 const l1Cache = new LRUCache<string, AuthContext>({
   max: 10000,
@@ -62,6 +62,7 @@ export const authPlugin = fp(async (fastify, opts) => {
     const l1Cached = l1Cache.get(cacheKey);
     if (l1Cached) {
       request.auth = l1Cached;
+      authL1CacheHitsTotal.inc();
       timer();
       return;
     }
@@ -83,6 +84,7 @@ export const authPlugin = fp(async (fastify, opts) => {
 
     // 3. Fallback to DB (Protected by SingleFlight coalescing)
     try {
+      authDbFallbackTotal.inc();
       const authContext = await authSingleFlight.do(cacheKey, async () => {
         const [record] = await db
           .select({
@@ -128,6 +130,7 @@ export const authPlugin = fp(async (fastify, opts) => {
     } catch (error: any) {
       timer();
       if (error.message === 'SINGLEFLIGHT_TOO_MANY_WAITERS') {
+        authSingleflightRejectedTotal.inc();
         return reply.status(429).send({ success: false, error: { code: 'TOO_MANY_REQUESTS', message: 'Too many concurrent requests, please try again' } });
       }
       if (error.statusCode) {
