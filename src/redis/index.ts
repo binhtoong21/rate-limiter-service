@@ -68,7 +68,7 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 export const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: 0, // Fail fast for rate limiting hot path
   connectTimeout: 500,
-  commandTimeout: 50,
+  commandTimeout: process.env.NODE_ENV === 'test' ? 1000 : 50,
 });
 
 redis.on('error', (err) => {
