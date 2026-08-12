@@ -40,12 +40,12 @@ export const authPlugin = fp(async (fastify, opts) => {
 
     if (!apiKey) {
       timer();
-      return reply.status(401).send({ error: 'Missing X-API-Key header' });
+      return reply.status(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Missing API Key' } });
     }
 
     if (!AuthService.isValidFormat(apiKey)) {
       timer();
-      return reply.status(401).send({ error: 'Invalid API Key format' });
+      return reply.status(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Invalid API Key format' } });
     }
 
     const keyHash = AuthService.hashApiKey(apiKey);
@@ -82,7 +82,7 @@ export const authPlugin = fp(async (fastify, opts) => {
 
       if (!record || record.status !== 'active') {
         timer();
-        return reply.status(401).send({ error: 'Invalid or revoked API Key' });
+        return reply.status(401).send({ success: false, error: { code: 'INVALID_API_KEY', message: 'Invalid or revoked API Key' } });
       }
 
       const authContext: AuthContext = {
@@ -105,7 +105,7 @@ export const authPlugin = fp(async (fastify, opts) => {
     } catch (error) {
       request.log.error({ err: error }, 'Database error during auth');
       timer();
-      return reply.status(500).send({ error: 'Internal Server Error' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_SERVER_ERROR', message: 'Internal Server Error' } });
     }
   });
 });

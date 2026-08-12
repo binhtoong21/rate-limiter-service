@@ -13,14 +13,14 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
   }>('/:slug/quota', async (request, reply) => {
     // Admin only guard
     if (!request.auth.isAdmin) {
-      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Admin access required' });
+      return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
 
     const { slug } = request.params;
     const { amount } = request.body;
 
     if (typeof amount !== 'number' || amount < 0) {
-      return reply.status(400).send({ error: 'BAD_REQUEST', message: 'Amount must be a non-negative number' });
+      return reply.status(400).send({ success: false, error: { code: 'BAD_REQUEST', message: 'Amount must be a non-negative number' } });
     }
 
     const idempotencyKey = request.headers['x-idempotency-key'] as string | undefined;
@@ -28,7 +28,7 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     // Find org by slug
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
     if (!org) {
-      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Organization not found' });
+      return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Organization not found' } });
     }
 
     let fingerprint: string | undefined;
@@ -41,11 +41,11 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
           // because it might have changed since the event.
           // However, for pure idempotency, returning the total from the cached event is correct.
           const currentAvailable = await redis.get(`quota:pool:${org.id}:available`);
-          return reply.send({ data: { quotaAllocated: cachedResult.amount, available: parseInt(currentAvailable || '0', 10) } });
+          return reply.send({ success: true, data: { quotaAllocated: cachedResult.amount, available: parseInt(currentAvailable || '0', 10) } });
         }
       } catch (err: any) {
         if (err.message === 'DUPLICATE_IDEMPOTENCY_KEY') {
-          return reply.status(409).send({ error: 'DUPLICATE_IDEMPOTENCY_KEY', message: 'Idempotency key already used for a different request' });
+          return reply.status(409).send({ success: false, error: { code: 'DUPLICATE_IDEMPOTENCY_KEY', message: 'Idempotency key already used for a different request' } });
         }
         throw err;
       }
@@ -79,7 +79,7 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
       if (err.code === '23505' && idempotencyKey) {
         const event = await idempotencyService.handleUniqueViolation(idempotencyKey);
         const currentAvailable = await redis.get(`quota:pool:${org.id}:available`);
-        return reply.send({ data: { quotaAllocated: event.amount, available: parseInt(currentAvailable || '0', 10) } });
+        return reply.send({ success: true, data: { quotaAllocated: event.amount, available: parseInt(currentAvailable || '0', 10) } });
       }
       throw err;
     }
@@ -97,21 +97,21 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
       await idempotencyService.mark(idempotencyKey, eventRecordId, fingerprint);
     }
 
-    return reply.send({ data: { quotaAllocated: amount, available: parseInt(returnedAmount, 10) } });
+    return reply.send({ success: true, data: { quotaAllocated: amount, available: parseInt(returnedAmount, 10) } });
   });
 
   fastify.get<{
     Params: { slug: string };
   }>('/:slug/quota/pool', async (request, reply) => {
     if (!request.auth.isAdmin) {
-      return reply.status(403).send({ error: 'FORBIDDEN', message: 'Admin access required' });
+      return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
 
     const { slug } = request.params;
 
     const [org] = await db.select().from(organizations).where(eq(organizations.slug, slug)).limit(1);
     if (!org) {
-      return reply.status(404).send({ error: 'NOT_FOUND', message: 'Organization not found' });
+      return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Organization not found' } });
     }
 
     const pipeline = redis.pipeline();
@@ -124,7 +124,7 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     const results = await pipeline.exec();
 
     if (!results) {
-      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis pipeline failed' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Redis pipeline failed' } });
     }
 
     const [totalErr, totalRes] = results[0];
@@ -134,11 +134,10 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     const [availableErr, availableRes] = results[4];
 
     if (totalErr || reservedErr || loanedOutErr || receivedErr || availableErr) {
-      return reply.status(500).send({ error: 'INTERNAL_ERROR', message: 'Redis read error' });
+      return reply.status(500).send({ success: false, error: { code: 'INTERNAL_ERROR', message: 'Redis read error' } });
     }
 
-    return reply.send({
-      data: {
+    return reply.send({ success: true, data: {
         orgId: org.id,
         slug: org.slug,
         pool: {
