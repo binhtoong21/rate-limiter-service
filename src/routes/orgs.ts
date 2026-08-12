@@ -99,6 +99,7 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
       `quota:pool:${org.id}:total`,
       `quota:pool:${org.id}:available`,
       `quota:pool:${org.id}:reserved`,
+      `quota:pool:${org.id}:loaned_out`,
       amount.toString()
     );
 

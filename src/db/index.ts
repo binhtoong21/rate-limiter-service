@@ -6,10 +6,13 @@ const connectionString = process.env.DATABASE_URL || 'postgres://root:rootpasswo
 
 // For queries
 function getPositiveSafeInt(val: string | undefined, defaultVal: number): number {
-  if (!val) return defaultVal;
-  const num = Number(val);
-  if (!Number.isSafeInteger(num) || num <= 0 || val.trim() !== val || val.includes('.')) {
+  if (val === undefined) return defaultVal;
+  if (!/^[1-9]\d*$/.test(val)) {
     throw new Error(`Invalid positive integer for DB connection setting: ${val}`);
+  }
+  const num = Number(val);
+  if (!Number.isSafeInteger(num)) {
+    throw new Error(`Invalid positive safe integer for DB connection setting: ${val}`);
   }
   return num;
 }
