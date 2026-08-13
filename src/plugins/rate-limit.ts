@@ -98,7 +98,7 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
         return reply.status(429).send({
           success: false,
           error: {
-            code: 'TOO_MANY_REQUESTS',
+            code: 'RATE_LIMIT_EXCEEDED',
             message: 'Rate limit exceeded',
           }
         });
@@ -118,7 +118,7 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
         return reply.status(429).send({
           success: false,
           error: {
-            code: 'TOO_MANY_REQUESTS',
+            code: 'RATE_LIMITER_DEGRADED',
             message: 'Rate limiter degraded and organization is fail-closed',
           }
         });
@@ -128,7 +128,7 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
         return reply.status(503).send({
           success: false,
           error: {
-            code: 'SERVICE_UNAVAILABLE',
+            code: 'REDIS_UNAVAILABLE',
             message: 'Rate limiter degraded and org config is unknown',
           }
         });

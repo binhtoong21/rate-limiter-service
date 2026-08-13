@@ -75,7 +75,7 @@ export function buildApp(opts = {}): FastifyInstance {
         if (fastifyError.statusCode === 403) code = 'FORBIDDEN';
         if (fastifyError.statusCode === 404) code = 'NOT_FOUND';
         if (fastifyError.statusCode === 409) code = 'CONFLICT';
-        if (fastifyError.statusCode === 429) code = 'TOO_MANY_REQUESTS';
+        if (fastifyError.statusCode === 429) code = 'RATE_LIMIT_EXCEEDED';
         
         // We might have custom error classes that define their own string codes
         if (fastifyError.code && typeof fastifyError.code === 'string') {
