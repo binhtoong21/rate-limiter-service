@@ -32,11 +32,12 @@ export const authPlugin = fp(async (fastify, opts) => {
   fastify.decorateRequest('auth', null as unknown as AuthContext);
 
   fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    // Skip auth for health, metrics, and dev routes
+    // Skip auth for health, metrics, dev, and bench routes
     if (
       request.url.startsWith('/health') || 
       request.url.startsWith('/metrics') || 
-      request.url.startsWith('/dev/')
+      request.url.startsWith('/dev/') ||
+      request.url.startsWith('/bench/')
     ) {
       return;
     }

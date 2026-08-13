@@ -57,4 +57,13 @@ export default async function (fastify: FastifyInstance) {
       timestamp: Date.now()
     });
   });
+
+  // Benchmark noop route — bypasses auth, rate-limit, and all middleware.
+  // Used to measure raw Fastify/Node.js HTTP throughput ceiling.
+  // Only available in test/development environments.
+  if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development') {
+    fastify.get('/bench/noop', { config: { skipAuth: true } }, async (request, reply) => {
+      return reply.send({ ok: true });
+    });
+  }
 }
