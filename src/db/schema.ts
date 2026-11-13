@@ -119,6 +119,7 @@ export const quotaEvents = pgTable("quota_events", {
       .on(table.orgId, table.createdAt.desc())
       .where(sql`${table.eventType} IN ('TRANSFER_DEBIT', 'TRANSFER_CREDIT', 'TRANSFER_FAILED', 'LOAN_CREATE', 'LOAN_REPAY', 'LOAN_EXPIRE', 'LOAN_CANCEL')`),
     amountPositiveCheck: check('quota_events_amount_check', sql`(${table.amount} > 0) OR (${table.amount} = 0 AND ${table.eventType} IN ('ALLOCATION_ADJUST', 'ALLOCATION_ADJUST_FAILED'))`),
-    balancePositiveCheck: check('quota_events_balance_check', sql`${table.balanceAfter} >= 0`)
+    // Settlement and lease-return events may leave a borrower in deficit (see deficit.service.ts)
+    balancePositiveCheck: check('quota_events_balance_check', sql`(${table.balanceAfter} >= 0) OR (${table.eventType} IN ('LOAN_CANCEL', 'LOAN_EXPIRE', 'LEASE_RELEASE', 'LEASE_EXPIRE', 'RECONCILIATION_CORRECTION'))`)
   };
 });
