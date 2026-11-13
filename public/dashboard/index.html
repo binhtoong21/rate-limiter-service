@@ -585,7 +585,9 @@
 
   <script>
     'use strict';
-    const BASE_LIMIT = 5, WINDOW_S = 10, CHART_S = 60, POLL_MS = 2000;
+    // Overwritten from the server (data.limits in /api/dashboard/overview) on every poll
+    let BASE_LIMIT = 5, WINDOW_S = 10;
+    const CHART_S = 60, POLL_MS = 2000;
     const VIEWS = ['overview', 'trading', 'limits', 'resilience', 'audit'];
 
     const $ = (id) => document.getElementById(id);
@@ -617,7 +619,7 @@
     const orgById = (id) => state.orgs.find((o) => o.id === id);
     const orgLabel = (id) => { const o = orgById(id); return o ? short(o.name) : 'Unknown org'; };
     const glyph = (o) => { const s = (o?.slug || o?.name || '?').toLowerCase(); return s.startsWith('alpha') ? 'α' : s.startsWith('beta') ? 'β' : s[0].toUpperCase(); };
-    const limitFor = (o) => BASE_LIMIT + (o?.pool?.reserved || 0);
+    const limitFor = (o) => o?.effectiveLimit ?? (BASE_LIMIT + (o?.pool?.reserved || 0));
     const secsLeft = (iso) => iso ? Math.max(0, Math.floor((new Date(iso).getTime() - Date.now()) / 1000)) : 0;
     function dur(s) {
       if (s <= 0) return 'expiring…';
@@ -675,6 +677,10 @@
         if (json.success && json.data) {
           state.data = json.data;
           state.orgs = json.data.organizations || [];
+          if (json.data.limits) {
+            BASE_LIMIT = json.data.limits.baseLimit;
+            WINDOW_S = Math.round(json.data.limits.windowMs / 1000);
+          }
           state.lastOk = Date.now();
           setOnline(true);
           render();
@@ -872,7 +878,7 @@
     // ---------- rate limiting ----------
     function renderLimitTiles() {
       $('limit-tiles').innerHTML = state.orgs.slice(0, 2).map((o) => {
-        const r = o.pool?.reserved || 0;
+        const r = o.pool?.activeLeaseSum ?? o.pool?.reserved ?? 0;
         return `<div class="card limit-tile">
           <div class="org-top"><div class="org-badge">${glyph(o)}</div><div><div class="org-name">${esc(o.name)}</div><div class="faint" style="font-size:12.5px">${fmt(o.pool?.available)} quota available to lease</div></div></div>
           <div class="limit-eq"><span><b>${BASE_LIMIT}</b> base</span><span>+</span><span><b>${fmt(r)}</b> leased</span><span>=</span><span class="total num">${limitFor(o)}</span><span>req / ${WINDOW_S}s</span></div>

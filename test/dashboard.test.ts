@@ -65,6 +65,7 @@ describe('Web Dashboard & Live Visual Simulator', () => {
     expect(body.data.organizations[0].pool.total).toBe(10000);
     expect(body.data.organizations[1].pool.total).toBe(5000);
     expect(body.data.desync).toBeDefined();
+    expect(body.data.limits).toEqual({ baseLimit: 5, windowMs: 10000 });
   });
 
   it('creates peer-to-peer quota loans via POST /api/dashboard/loans', async () => {

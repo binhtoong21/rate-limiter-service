@@ -3,6 +3,7 @@ import { db } from '../db';
 import { redis } from '../redis';
 import { sql } from 'drizzle-orm';
 import { register } from '../plugins/metrics';
+import { PING_BASE_LIMIT, PING_WINDOW_MS } from '../config/rate-limits';
 
 export default async function (fastify: FastifyInstance) {
   // Prometheus metrics endpoint (Internal access only)
@@ -84,7 +85,7 @@ export default async function (fastify: FastifyInstance) {
   });
 
   // Demo hot path endpoint
-  // Limit: 5 requests per 10 seconds
+  // Limit: PING_BASE_LIMIT requests per PING_WINDOW_MS, plus active leases
   fastify.post('/api/ping', {
     schema: {
       tags: ['System'],
@@ -122,8 +123,7 @@ export default async function (fastify: FastifyInstance) {
       },
     },
     preHandler: async (request, reply) => {
-      // 10 seconds window, 5 requests max
-      await fastify.checkRateLimit(request, reply, 5, 10000);
+      await fastify.checkRateLimit(request, reply, PING_BASE_LIMIT, PING_WINDOW_MS);
     }
   }, async (request, reply) => {
     const auth = request.auth;

@@ -11,6 +11,7 @@ import { AuthService } from '../services/auth.service';
 import { LoanService } from '../services/loan.service';
 import { QuotaService } from '../services/quota.service';
 import { eq, desc, and, or, sql } from 'drizzle-orm';
+import { PING_BASE_LIMIT, PING_WINDOW_MS } from '../config/rate-limits';
 
 interface PoolState {
   total: number;
@@ -394,6 +395,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
             pipeline.get(`quota:pool:${orgId}:loaned_out`);
             pipeline.get(`quota:pool:${orgId}:received`);
             pipeline.get(`quota:pool:${orgId}:available`);
+            pipeline.get(`quota:lease:active_sum:${orgId}`);
             const res = await pipeline.exec();
 
             const total = parseInt((res?.[0]?.[1] as string) || initialTotal.toString(), 10);
@@ -409,7 +411,14 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
               desyncDetails = `Available quota (${available}) does not match expected (${expectedAvailable}) for org ${orgId}`;
             }
 
-            return { total, reserved, loanedOut, received, available };
+            // The rate limiter reads quota:lease:active_sum; it must equal the pool's reserved amount
+            const activeLeaseSum = parseInt((res?.[5]?.[1] as string) || '0', 10);
+            if (activeLeaseSum !== reserved && !desyncDetected) {
+              desyncDetected = true;
+              desyncDetails = `Leased quota (${reserved}) does not match the lease sum used by the rate limiter (${activeLeaseSum}) for org ${orgId}`;
+            }
+
+            return { total, reserved, loanedOut, received, available, activeLeaseSum };
           };
 
           const alphaPool = await readPool(alpha.id, alpha.quotaAllocated);
@@ -424,6 +433,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
               apiKey: alphaKey,
               serviceId: alphaService.id,
               pool: alphaPool,
+              effectiveLimit: PING_BASE_LIMIT + alphaPool.activeLeaseSum,
             },
             {
               id: beta.id,
@@ -433,6 +443,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
               apiKey: betaKey,
               serviceId: betaService.id,
               pool: betaPool,
+              effectiveLimit: PING_BASE_LIMIT + betaPool.activeLeaseSum,
             },
           ];
 
@@ -517,6 +528,10 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
         loans: loansData,
         leases: leasesData,
         events: eventsData,
+        limits: {
+          baseLimit: PING_BASE_LIMIT,
+          windowMs: PING_WINDOW_MS,
+        },
         desync: {
           detected: desyncDetected,
           details: desyncDetails,
@@ -1066,17 +1081,17 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     }
 
     const org = fallbackStore.orgs.find((o) => o.slug === orgSlug) || fallbackStore.orgs[0];
-    const baseLimit = 5;
+    const baseLimit = PING_BASE_LIMIT;
     const effectiveLimit = baseLimit + org.pool.reserved;
 
     // Check sliding window simulation
-    const winKey = `sim:win:${org.id}:${Math.floor(now / 10000)}`;
+    const winKey = `sim:win:${org.id}:${Math.floor(now / PING_WINDOW_MS)}`;
     let count = 0;
 
     try {
       if (redis.status === 'ready') {
         count = await redis.incr(winKey);
-        if (count === 1) await redis.pexpire(winKey, 20000);
+        if (count === 1) await redis.pexpire(winKey, PING_WINDOW_MS * 2);
       } else {
         // in-memory window count
         (global as any).__simCounts = (global as any).__simCounts || {};
@@ -1092,7 +1107,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     reply.header('X-RateLimit-Remaining', remaining);
 
     if (count > effectiveLimit) {
-      const resetInSeconds = Math.ceil((10000 - (now % 10000)) / 1000);
+      const resetInSeconds = Math.ceil((PING_WINDOW_MS - (now % PING_WINDOW_MS)) / 1000);
       reply.header('Retry-After', resetInSeconds);
       return reply.status(429).send({
         success: false,
