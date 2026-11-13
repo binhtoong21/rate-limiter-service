@@ -2,7 +2,7 @@ import { FastifyPluginAsync } from 'fastify';
 import { db } from '../../db';
 import { loans } from '../../db/schema';
 import { eq, or, and, desc, sql } from 'drizzle-orm';
-import { LoanService, NotFoundError, ConflictError } from '../../services/loan.service';
+import { LoanService, NotFoundError, ConflictError, QuotaInUseError } from '../../services/loan.service';
 
 const loanSchema = {
   type: 'object',
@@ -313,6 +313,9 @@ const loansRoutes: FastifyPluginAsync = async (fastify) => {
       }
       if (err instanceof NotFoundError) {
         return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Loan not found' }});
+      }
+      if (err instanceof QuotaInUseError) {
+        return reply.status(422).send({ success: false, error: { code: 'QUOTA_IN_USE', message: err.message }});
       }
       if (err.message === 'UNAUTHORIZED_ACTOR') {
         return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Only the borrower can repay the loan' }});

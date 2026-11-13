@@ -173,4 +173,31 @@ describe('Dashboard (real PostgreSQL + Redis)', () => {
     const after = await app.inject({ method: 'POST', url: '/api/ping', headers: { 'x-api-key': a.apiKey } });
     expect(after.headers['x-limiter-fallback']).toBeUndefined();
   });
+
+  it('refuses a repay while the borrowed quota is leased out', async () => {
+    const before = org(await overview(), 'beta').pool.available;
+    const loanRes = await app.inject({
+      method: 'POST', url: '/api/dashboard/loans',
+      payload: { lenderOrgId: alpha.id, borrowerOrgId: beta.id, amount: 100, ttlSeconds: 60 },
+    });
+    expect(loanRes.statusCode).toBe(201);
+    const loan = JSON.parse(loanRes.payload).data;
+    const leaseRes = await app.inject({
+      method: 'POST', url: '/api/dashboard/leases',
+      payload: { orgId: beta.id, amount: before + 100, ttlSeconds: 60 },
+    });
+    expect(leaseRes.statusCode).toBe(201);
+    const lease = JSON.parse(leaseRes.payload).data;
+    try {
+      const refused = await app.inject({ method: 'POST', url: `/api/dashboard/loans/${loan.id}/repay` });
+      expect(refused.statusCode).toBe(422);
+      expect(JSON.parse(refused.payload).error.code).toBe('QUOTA_IN_USE');
+      expect(org(await overview(), 'beta').pool.available).toBe(0);
+    } finally {
+      await app.inject({ method: 'DELETE', url: `/api/dashboard/leases/${lease.id}` });
+    }
+    const repay = await app.inject({ method: 'POST', url: `/api/dashboard/loans/${loan.id}/repay` });
+    expect(repay.statusCode).toBe(200);
+    expect(org(await overview(), 'beta').pool.available).toBe(before);
+  });
 });

@@ -440,7 +440,10 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     const message: string = err?.message || 'Unexpected error';
     let status = 500;
     let code = defaultCode;
-    if (err?.name === 'NotFoundError' || /not found/i.test(message)) {
+    if (err?.name === 'QuotaInUseError') {
+      status = 422;
+      code = 'QUOTA_IN_USE';
+    } else if (err?.name === 'NotFoundError' || /not found/i.test(message)) {
       status = 404;
       code = 'NOT_FOUND';
     } else if (err?.name === 'InsufficientQuotaError' || message === 'INSUFFICIENT_QUOTA') {

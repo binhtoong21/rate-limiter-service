@@ -20,6 +20,13 @@ export class ConflictError extends Error {
   }
 }
 
+export class QuotaInUseError extends Error {
+  constructor(public readonly freeQuota: number, public readonly needed: number) {
+    super(`Only ${freeQuota} of the ${needed} borrowed quota is free. Release leases first, then repay.`);
+    this.name = 'QuotaInUseError';
+  }
+}
+
 export class LoanService {
   constructor(private fastify: FastifyInstance) {}
 
@@ -300,6 +307,12 @@ export class LoanService {
         const borrowerAvailableStr = await redis.get(`quota:pool:${borrowerOrgId}:available`);
         const borrowerAvailable = parseInt(borrowerAvailableStr || '0', 10);
         const borrowerBalanceAfter = borrowerAvailable - amount;
+
+        // A borrower can only give back quota it is not using. Lender recall and expiry never fail here;
+        // they may leave the borrower in deficit, which deficit enforcement resolves.
+        if (settleType === 'repay' && borrowerAvailable < amount) {
+          throw new QuotaInUseError(Math.max(0, borrowerAvailable), amount);
+        }
 
         // 4A: Postgres UPDATE
         const [updatedLoan] = await tx
