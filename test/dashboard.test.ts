@@ -16,6 +16,7 @@ describe('Dashboard (real PostgreSQL + Redis)', () => {
   const org = (data: any, slug: string) => data.organizations.find((o: any) => o.slug === slug);
 
   beforeAll(async () => {
+    process.env.DASHBOARD_DEMO = 'true';
     app = buildApp();
     await app.ready();
     const data = await overview();
@@ -126,13 +127,31 @@ describe('Dashboard (real PostgreSQL + Redis)', () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it.runIf(process.env.NODE_ENV === 'production')('Redis outage drill is refused in production', async () => {
-    const res = await app.inject({ method: 'POST', url: '/api/dashboard/chaos/redis-outage', payload: { seconds: 10 } });
-    expect(res.statusCode).toBe(403);
-    expect(JSON.parse(res.payload).error.code).toBe('CHAOS_DISABLED');
+  it('disables the whole dashboard API in production unless DASHBOARD_DEMO=true', async () => {
+    const saved = { env: process.env.NODE_ENV, demo: process.env.DASHBOARD_DEMO };
+    process.env.NODE_ENV = 'production';
+    delete process.env.DASHBOARD_DEMO;
+    try {
+      const ov = await app.inject({ method: 'GET', url: '/api/dashboard/overview' });
+      expect(ov.statusCode).toBe(403);
+      expect(JSON.parse(ov.payload).error.code).toBe('DASHBOARD_DEMO_DISABLED');
+      expect(ov.payload).not.toContain('pk_test_');
+      const loan = await app.inject({
+        method: 'POST', url: '/api/dashboard/loans',
+        payload: { lenderOrgId: alpha.id, borrowerOrgId: beta.id, amount: 1 },
+      });
+      expect(loan.statusCode).toBe(403);
+      const drill = await app.inject({ method: 'POST', url: '/api/dashboard/chaos/redis-outage', payload: { seconds: 10 } });
+      expect(drill.statusCode).toBe(403);
+      const page = await app.inject({ method: 'GET', url: '/dashboard' });
+      expect(page.statusCode).toBe(200);
+    } finally {
+      process.env.NODE_ENV = saved.env;
+      if (saved.demo === undefined) delete process.env.DASHBOARD_DEMO; else process.env.DASHBOARD_DEMO = saved.demo;
+    }
   });
 
-  it.skipIf(process.env.NODE_ENV === 'production')('Redis outage drill: fail-open org passes, fail-closed org is refused', async () => {
+  it('Redis outage drill: fail-open org passes, fail-closed org is refused', async () => {
     const data = await overview();
     const a = org(data, 'alpha'); // failOpen: true
     const b = org(data, 'beta'); // failOpen: false
