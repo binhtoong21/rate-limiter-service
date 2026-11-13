@@ -14,10 +14,22 @@ import { eq, desc, and, or, sql } from 'drizzle-orm';
 import { PING_BASE_LIMIT, PING_WINDOW_MS } from '../config/rate-limits';
 import { chaosAllowed, startRedisOutage, stopRedisOutage, redisOutageEndsAt } from '../chaos/redis-outage';
 import { reconcileOrg } from '../services/reconciliation.service';
+import { demoEnabled } from '../config/demo';
 
 
 
 export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
+  // The dashboard API is a demo: no API-key auth, seeds admin orgs with well-known keys.
+  fastify.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/api/dashboard/') || demoEnabled()) return;
+    return reply.status(403).send({
+      success: false,
+      error: {
+        code: 'DASHBOARD_DEMO_DISABLED',
+        message: 'The demo dashboard API is disabled in production. Set DASHBOARD_DEMO=true only on a private deployment.',
+      },
+    });
+  });
   const publicDir = path.join(process.cwd(), 'public');
   if (!fs.existsSync(publicDir)) {
     fs.mkdirSync(publicDir, { recursive: true });
@@ -594,7 +606,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     if (!chaosAllowed()) {
       return reply.status(403).send({
         success: false,
-        error: { code: 'CHAOS_DISABLED', message: 'Chaos drills are disabled in production' },
+        error: { code: 'CHAOS_DISABLED', message: 'Chaos drills are disabled' },
       });
     }
     const seconds = Math.min(120, Math.max(5, Math.floor(Number(req.body?.seconds) || 30)));
