@@ -2,7 +2,67 @@ import { FastifyPluginAsync } from 'fastify';
 import { redis } from '../../redis';
 
 const poolRoutes: FastifyPluginAsync = async (fastify) => {
-  fastify.get('/pool', async (request, reply) => {
+  fastify.get('/pool', {
+    schema: {
+      tags: ['Orgs'],
+      summary: 'Get caller organization quota pool',
+      description: 'Retrieves the real-time quota pool breakdown for the authenticated caller organization.',
+      security: [{ ApiKeyAuth: [] }],
+      response: {
+        200: {
+          description: 'Current quota pool status',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: {
+              type: 'object',
+              properties: {
+                total: { type: 'integer', example: 10000 },
+                reserved: { type: 'integer', example: 500 },
+                loanedOut: { type: 'integer', example: 2000 },
+                received: { type: 'integer', example: 0 },
+                available: { type: 'integer', example: 7500 },
+              },
+              required: ['total', 'reserved', 'loanedOut', 'received', 'available'],
+            },
+          },
+          required: ['success', 'data'],
+        },
+        401: {
+          description: 'Unauthorized - invalid or missing API key',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'MISSING_API_KEY' },
+                message: { type: 'string', example: 'Missing API Key' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        500: {
+          description: 'Redis system failure or pipeline error',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'INTERNAL_ERROR' },
+                message: { type: 'string' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+      },
+    },
+  }, async (request, reply) => {
     const { orgId } = request.auth;
 
     const pipeline = redis.pipeline();

@@ -10,7 +10,149 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
     Params: { slug: string };
     Body: { amount: number };
     Headers: { 'x-idempotency-key'?: string };
-  }>('/:slug/quota', async (request, reply) => {
+  }>('/:slug/quota', {
+    schema: {
+      tags: ['Orgs'],
+      summary: 'Adjust organization quota allocation',
+      description: 'Admin-only endpoint to set the total allocated quota for an organization. Atomically updates PostgreSQL and Redis.',
+      security: [{ ApiKeyAuth: [] }],
+      params: {
+        type: 'object',
+        required: ['slug'],
+        properties: {
+          slug: { type: 'string', description: 'Organization slug identifier' },
+        },
+      },
+      headers: {
+        type: 'object',
+        properties: {
+          'x-idempotency-key': { type: 'string', description: 'Unique idempotency key' },
+        },
+        required: ['x-idempotency-key'],
+      },
+      body: {
+        type: 'object',
+        required: ['amount'],
+        properties: {
+          amount: { type: 'integer', minimum: 0, description: 'New quota allocation amount' },
+        },
+      },
+      response: {
+        200: {
+          description: 'Quota allocation updated successfully',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: {
+              type: 'object',
+              properties: {
+                quotaAllocated: { type: 'integer', example: 10000 },
+                available: { type: 'integer', example: 10000 },
+              },
+              required: ['quotaAllocated', 'available'],
+            },
+          },
+          required: ['success', 'data'],
+        },
+        400: {
+          description: 'Validation error or invalid input',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'BAD_REQUEST' },
+                message: { type: 'string' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        403: {
+          description: 'Forbidden - admin access required',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'FORBIDDEN' },
+                message: { type: 'string', example: 'Admin access required' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        404: {
+          description: 'Organization not found',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'NOT_FOUND' },
+                message: { type: 'string', example: 'Organization not found' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        409: {
+          description: 'Duplicate idempotency key conflict',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'DUPLICATE_IDEMPOTENCY_KEY' },
+                message: { type: 'string' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        422: {
+          description: 'Allocation update would make available quota negative',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'ALLOCATION_BELOW_COMMITTED_QUOTA' },
+                message: { type: 'string' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        503: {
+          description: 'Redis is unavailable or returned an error',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'REDIS_UNAVAILABLE' },
+                message: { type: 'string' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+      },
+    },
+  }, async (request, reply) => {
     // Admin only guard
     if (!request.auth.isAdmin) {
       return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
@@ -144,7 +286,98 @@ const orgsRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get<{
     Params: { slug: string };
-  }>('/:slug/quota/pool', async (request, reply) => {
+  }>('/:slug/quota/pool', {
+    schema: {
+      tags: ['Orgs'],
+      summary: 'Get organization quota pool details',
+      description: 'Admin-only endpoint. Retrieves the real-time quota pool breakdown for an organization from Redis.',
+      security: [{ ApiKeyAuth: [] }],
+      params: {
+        type: 'object',
+        required: ['slug'],
+        properties: {
+          slug: { type: 'string', description: 'Organization slug identifier' },
+        },
+      },
+      response: {
+        200: {
+          description: 'Current organization quota pool status',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: {
+              type: 'object',
+              properties: {
+                orgId: { type: 'string', format: 'uuid' },
+                slug: { type: 'string', example: 'demo-corp' },
+                pool: {
+                  type: 'object',
+                  properties: {
+                    total: { type: 'integer', example: 10000 },
+                    reserved: { type: 'integer', example: 500 },
+                    loanedOut: { type: 'integer', example: 2000 },
+                    received: { type: 'integer', example: 0 },
+                    available: { type: 'integer', example: 7500 },
+                  },
+                  required: ['total', 'reserved', 'loanedOut', 'received', 'available'],
+                },
+              },
+              required: ['orgId', 'slug', 'pool'],
+            },
+          },
+          required: ['success', 'data'],
+        },
+        403: {
+          description: 'Forbidden - admin access required',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'FORBIDDEN' },
+                message: { type: 'string', example: 'Admin access required' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        404: {
+          description: 'Organization not found',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'NOT_FOUND' },
+                message: { type: 'string', example: 'Organization not found' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        500: {
+          description: 'Redis read failure or internal error',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'INTERNAL_ERROR' },
+                message: { type: 'string' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+      },
+    },
+  }, async (request, reply) => {
     if (!request.auth.isAdmin) {
       return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
