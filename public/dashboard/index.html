@@ -330,6 +330,10 @@
           <svg class="i" viewBox="0 0 24 24" style="color:var(--warn)"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
           <div class="grow"><b>Demo dashboard is disabled</b><span class="muted">This server runs with <span class="mono">NODE_ENV=production</span>. Set <span class="mono">DASHBOARD_DEMO=true</span> only on a private deployment to enable it.</span></div>
         </div>
+        <div class="alert-box" id="alert-workers" hidden>
+          <svg class="i" viewBox="0 0 24 24" style="color:var(--warn)"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+          <div class="grow"><b>Background workers are not running</b><span class="muted">Leases and loans will not end on their own, and quota deficits are not enforced. Start the server with <span class="mono">ENABLE_WORKERS=true</span> (<span class="mono">npm run dev</span> does this).</span></div>
+        </div>
         <div class="alert-box" id="alert-offline" hidden>
           <svg class="i" viewBox="0 0 24 24" style="color:var(--warn)"><path d="M12 20h.01M8.5 16.4a5 5 0 0 1 7 0M2 8.8a15 15 0 0 1 20 0M5 12.9a10 10 0 0 1 14 0"/></svg>
           <div class="grow"><b>Can't reach the server</b><span class="muted">Showing the last known data. Retrying automatically…</span></div>
@@ -739,7 +743,7 @@
     function render() {
       const d = state.data;
       if (!d) return;
-      renderHealth(d.system, d.desync);
+      renderHealth(d.system, d.desync, d.workers);
       if (changed('pools', [state.orgs, activeLoans()])) {
         $$('[data-pools]').forEach(renderPools);
         renderSimOrg(); renderLendForm(); renderLeaseForm(); renderLimitTiles();
@@ -754,13 +758,16 @@
     }
 
     // ---------- header / health ----------
-    function renderHealth(sys, desync) {
+    function renderHealth(sys, desync, workers) {
       if (!sys) return;
       const pgUp = sys.postgres === 'up', rUp = sys.redis === 'up';
+      const workersOff = pgUp && rUp && workers && workers.alive === false;
       const dot = $('health-dot'), txt = $('health-text');
       if (!pgUp || !rUp) { dot.className = 'dot bad'; txt.textContent = 'Degraded'; }
       else if (desync?.detected) { dot.className = 'dot warn'; txt.textContent = 'Drift detected'; }
+      else if (workersOff) { dot.className = 'dot warn'; txt.textContent = 'Workers not running'; }
       else { dot.className = 'dot'; txt.textContent = 'All systems operational'; }
+      $('alert-workers').hidden = !workersOff;
       $('alert-desync').hidden = !desync?.detected;
       $('alert-degraded').hidden = pgUp && rUp;
       if (desync?.detected) $('desync-text').textContent = ' ' + (desync.details || 'Available quota in Redis does not match the event log.');
@@ -826,7 +833,7 @@
             <div style="display:flex;gap:6px;margin-top:3px;flex-wrap:wrap">
               <span class="tag" title="${o.failOpen ? 'If Redis is down, requests are allowed' : 'If Redis is down, requests are rejected'}">${o.failOpen ? 'Fail-open' : 'Fail-closed'}</span>
               ${p.received ? `<span class="tag lent">+${fmt(p.received)} borrowed</span>` : ''}
-              ${p.available < 0 ? `<span class="tag bad" title="A lender took back quota this org still has leased. New leases are refused; after the grace period the newest leases are revoked.">Deficit ${fmt(-p.available)}${p.deficitSince ? ' · revoking in ' + Math.max(0, Math.ceil((p.deficitSince + p.deficitGraceMs - Date.now()) / 1000)) + 's' : ''}</span>` : ''}
+              ${p.available < 0 ? `<span class="tag bad" title="A lender took back quota this org still has leased. New leases are refused; after the grace period the newest leases are revoked.">Deficit ${fmt(-p.available)}${p.deficitSince ? ' · revoking in ' + Math.max(0, Math.ceil((p.deficitSince + p.deficitGraceMs - Date.now()) / 1000)) + 's' : state.data?.workers?.alive === false ? ' · workers off' : ''}</span>` : ''}
             </div>
           </div>
         </div>
@@ -1041,11 +1048,13 @@
       const who = `<b>${esc(orgLabel(e.orgId))}</b>`, other = `<b>${esc(orgLabel(e.counterpartOrgId))}</b>`, n = `<b>${fmt(e.amount)}</b>`;
       switch (e.eventType) {
         case 'LOAN_CREATE': return [`${who} lent ${n} to ${other}`, 'loan', 'Trading'];
-        case 'LOAN_REPAY': return [`Loan of ${n} repaid to ${who}`, 'loan', 'Trading'];
-        case 'LOAN_CANCEL': return [`${who} recalled a loan of ${n}`, 'loan', 'Trading'];
-        case 'LOAN_EXPIRE': return [`Loan of ${n} expired and went back to ${who}`, 'loan', 'Trading'];
+        case 'LOAN_REPAY': return [`${who} repaid ${n} to ${other}`, 'loan', 'Trading'];
+        case 'LOAN_CANCEL': return [`${who} recalled ${n} from ${other}`, 'loan', 'Trading'];
+        case 'LOAN_EXPIRE': return [`Loan of ${n} to ${other} expired and went back to ${who}`, 'loan', 'Trading'];
         case 'LEASE_CLAIM': return [`${who} leased +${n} requests per window`, 'lease', 'Rate limit'];
-        case 'LEASE_RELEASE': return [`${who} released a lease of ${n}`, 'lease', 'Rate limit'];
+        case 'LEASE_RELEASE': return e.metadata?.reason === 'DEFICIT_CLAWBACK'
+          ? [`${who}'s lease of ${n} was revoked to cover a quota deficit`, 'lease', 'Rate limit']
+          : [`${who} released a lease of ${n}`, 'lease', 'Rate limit'];
         case 'LEASE_EXPIRE': return [`${who}'s lease of ${n} expired`, 'lease', 'Rate limit'];
         case 'LEASE_CLAIM_FAILED': return [`${who} failed to lease ${n}`, 'lease', 'Rate limit'];
         case 'RECONCILIATION_CORRECTION': return [`Reconciliation corrected ${who}'s Redis counters`, 'heal', 'Resilience'];

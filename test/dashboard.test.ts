@@ -246,4 +246,22 @@ describe('Dashboard (real PostgreSQL + Redis)', () => {
       .where(and(eq(quotaEvents.leaseId, lease.id), eq(quotaEvents.eventType, 'LEASE_RELEASE')));
     expect(ev[0].metadata).toMatchObject({ reason: 'DEFICIT_CLAWBACK' });
   });
+
+  it('shows each loan action once, from the actor, and reports worker liveness', async () => {
+    const res = await app.inject({
+      method: 'POST', url: '/api/dashboard/loans',
+      payload: { lenderOrgId: alpha.id, borrowerOrgId: beta.id, amount: 10, ttlSeconds: 60 },
+    });
+    expect(res.statusCode).toBe(201);
+    const loan = JSON.parse(res.payload).data;
+    const repay = await app.inject({ method: 'POST', url: `/api/dashboard/loans/${loan.id}/repay` });
+    expect(repay.statusCode).toBe(200);
+
+    const data = await overview();
+    const forLoan = data.events.filter((e: any) => e.loanId === loan.id);
+    expect(forLoan.map((e: any) => [e.eventType, e.orgId]).sort()).toEqual(
+      [['LOAN_CREATE', alpha.id], ['LOAN_REPAY', beta.id]].sort(),
+    );
+    expect(typeof data.workers.alive).toBe('boolean');
+  });
 });
