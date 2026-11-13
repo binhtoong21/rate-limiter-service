@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { redis } from '../redis';
 import { rateLimitRequestsTotal, rateLimitCheckDuration } from './metrics';
+import { redisOutageActive } from '../chaos/redis-outage';
 
 let slidingWindowScriptSha: string;
 
@@ -30,6 +31,10 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
     const timer = rateLimitCheckDuration.startTimer({ algorithm });
 
     try {
+      if (redisOutageActive()) {
+        // Dev-only drill: take the same fallback path as a real Redis failure
+        throw new Error('Simulated Redis outage (chaos drill)');
+      }
       let allowed = false;
       let estimatedCount = 0;
 

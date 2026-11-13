@@ -125,4 +125,33 @@ describe('Dashboard (real PostgreSQL + Redis)', () => {
     const res = await app.inject({ method: 'POST', url: '/api/dashboard/ping-proxy' });
     expect(res.statusCode).toBe(404);
   });
+
+  it.runIf(process.env.NODE_ENV === 'production')('Redis outage drill is refused in production', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/dashboard/chaos/redis-outage', payload: { seconds: 10 } });
+    expect(res.statusCode).toBe(403);
+    expect(JSON.parse(res.payload).error.code).toBe('CHAOS_DISABLED');
+  });
+
+  it.skipIf(process.env.NODE_ENV === 'production')('Redis outage drill: fail-open org passes, fail-closed org is refused', async () => {
+    const data = await overview();
+    const a = org(data, 'alpha'); // failOpen: true
+    const b = org(data, 'beta'); // failOpen: false
+    const start = await app.inject({ method: 'POST', url: '/api/dashboard/chaos/redis-outage', payload: { seconds: 10 } });
+    expect(start.statusCode).toBe(200);
+    expect((await overview()).chaos.redisOutageUntil).toBeGreaterThan(Date.now());
+    try {
+      const pa = await app.inject({ method: 'POST', url: '/api/ping', headers: { 'x-api-key': a.apiKey } });
+      expect(pa.statusCode).toBe(200);
+      expect(pa.headers['x-limiter-fallback']).toBe('fail-open');
+      const pb = await app.inject({ method: 'POST', url: '/api/ping', headers: { 'x-api-key': b.apiKey } });
+      expect(pb.statusCode).toBe(429);
+      expect(pb.headers['x-limiter-fallback']).toBe('fail-closed');
+      expect(JSON.parse(pb.payload).error.code).toBe('RATE_LIMITER_DEGRADED');
+    } finally {
+      const stop = await app.inject({ method: 'DELETE', url: '/api/dashboard/chaos/redis-outage' });
+      expect(stop.statusCode).toBe(200);
+    }
+    const after = await app.inject({ method: 'POST', url: '/api/ping', headers: { 'x-api-key': a.apiKey } });
+    expect(after.headers['x-limiter-fallback']).toBeUndefined();
+  });
 });

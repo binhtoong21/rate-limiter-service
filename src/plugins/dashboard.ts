@@ -12,6 +12,7 @@ import { LoanService } from '../services/loan.service';
 import { QuotaService } from '../services/quota.service';
 import { eq, desc, and, or, sql } from 'drizzle-orm';
 import { PING_BASE_LIMIT, PING_WINDOW_MS } from '../config/rate-limits';
+import { chaosAllowed, startRedisOutage, stopRedisOutage, redisOutageEndsAt } from '../chaos/redis-outage';
 import { reconcileOrg } from '../services/reconciliation.service';
 
 
@@ -397,6 +398,9 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
           baseLimit: PING_BASE_LIMIT,
           windowMs: PING_WINDOW_MS,
         },
+        chaos: {
+          redisOutageUntil: redisOutageEndsAt(),
+        },
         desync: {
           detected: desyncDetected,
           details: desyncDetails,
@@ -582,6 +586,25 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     } catch (err) {
       return sendServiceError(reply, err, 'CHAOS_FAILED');
     }
+  });
+
+  // --- API ROUTE: POST/DELETE /api/dashboard/chaos/redis-outage ---
+  // Development-only drill: the rate limiter behaves as if Redis were unreachable.
+  fastify.post<{ Body: { seconds?: number } }>('/api/dashboard/chaos/redis-outage', async (req, reply) => {
+    if (!chaosAllowed()) {
+      return reply.status(403).send({
+        success: false,
+        error: { code: 'CHAOS_DISABLED', message: 'Chaos drills are disabled in production' },
+      });
+    }
+    const seconds = Math.min(120, Math.max(5, Math.floor(Number(req.body?.seconds) || 30)));
+    const endsAt = startRedisOutage(seconds);
+    return reply.send({ success: true, data: { endsAt, seconds } });
+  });
+
+  fastify.delete('/api/dashboard/chaos/redis-outage', async (req, reply) => {
+    stopRedisOutage();
+    return reply.send({ success: true, data: { endsAt: null } });
   });
 
   // --- API ROUTE: POST /api/dashboard/chaos/reconcile ---

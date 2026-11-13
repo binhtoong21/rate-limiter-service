@@ -340,6 +340,12 @@
           <a class="btn sm" href="#resilience" id="desync-go">Open Resilience</a>
           <button class="btn sm primary" data-action="reconcile">Reconcile now</button>
         </div>
+        <div class="alert-box" id="alert-outage" hidden>
+          <svg class="i" viewBox="0 0 24 24" style="color:var(--bad)"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+          <div class="grow"><b>Redis outage drill running</b><span class="muted">The rate limiter is using each org's fallback policy. Ends in <b class="num" id="outage-left">0</b>s.</span></div>
+          <a class="btn sm" href="#limits">Open simulator</a>
+          <button class="btn sm" data-action="outage-stop">End now</button>
+        </div>
       </div>
 
       <!-- ================= OVERVIEW ================= -->
@@ -463,6 +469,10 @@
                 <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
                 <span>Limit reached. New requests get <b>429</b>. Window resets in <b class="num" id="throttle-s">0</b>s.</span>
               </div>
+              <div class="throttle" id="sim-fallback" hidden style="background:var(--warn-soft);color:var(--warn)">
+                <svg class="i" viewBox="0 0 24 24"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/></svg>
+                <span id="sim-fallback-text"></span>
+              </div>
               <div>
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;flex-wrap:wrap">
                   <span style="font-size:13px;font-weight:550">Responses per second</span>
@@ -553,6 +563,17 @@
                   <button class="btn sm" data-action="reconcile">Run reconciliation</button>
                 </div>
               </div>
+              <div class="chaos-step">
+                <div class="n">3</div>
+                <div>
+                  <b style="font-size:13.5px">Simulate a Redis outage</b>
+                  <p>For 30 seconds the rate limiter cannot reach Redis. <b>Alpha</b> is fail-open, so its requests pass uncounted. <b>Beta</b> is fail-closed, so its requests are refused. Watch it in the <a href="#limits">Rate limiting simulator</a>.</p>
+                  <div style="display:flex;gap:6px;flex-wrap:wrap">
+                    <button class="btn sm danger" data-action="outage-start" id="outage-start">Start 30s outage</button>
+                    <button class="btn sm" data-action="outage-stop" id="outage-stop" hidden>End outage now</button>
+                  </div>
+                </div>
+              </div>
               <div class="summary-box" id="chaos-status"></div>
             </div>
           </div>
@@ -605,7 +626,7 @@
 
     const state = {
       data: null, orgs: [], sig: {}, live: true, online: null, lastOk: 0, pollTimer: null, inflight: false,
-      view: 'overview', feedFilter: 'ALL', showSettledLoans: false, showSettledLeases: false, chaos: '',
+      view: 'overview', feedFilter: 'ALL', showSettledLoans: false, showSettledLeases: false, chaos: '', outageUntil: 0,
       lend: { from: 0, amount: 500, ttl: 60 },
       lease: { org: 0, amount: 10, ttl: 60 },
       sim: { org: 0, sent: 0, ok: 0, bad: 0, latSum: 0, latN: 0, buckets: new Map(), lastLimit: null, lastRemaining: null, windowStart: 0, throttleUntil: 0, streamTimer: null },
@@ -685,6 +706,7 @@
             BASE_LIMIT = json.data.limits.baseLimit;
             WINDOW_S = Math.round(json.data.limits.windowMs / 1000);
           }
+          state.outageUntil = json.data.chaos?.redisOutageUntil || 0;
           state.lastOk = Date.now();
           setOnline(true);
           render();
@@ -753,7 +775,7 @@
       const nl = activeLoans().length, ns = activeLeases().length;
       $('nb-trading').textContent = nl ? `${nl} active` : '';
       $('nb-limits').innerHTML = state.sim.streamTimer ? '<span class="dot live"></span> streaming' : ns ? `${ns} lease${ns > 1 ? 's' : ''}` : '';
-      $('nb-resilience').innerHTML = state.data?.desync?.detected ? '<span class="dot warn"></span>' : '';
+      $('nb-resilience').innerHTML = (state.data?.desync?.detected || state.outageUntil > Date.now()) ? '<span class="dot warn"></span>' : '';
     }
 
     // ---------- overview ----------
@@ -966,6 +988,8 @@
         const lat = performance.now() - t0;
         const lim = parseInt(res.headers.get('X-RateLimit-Limit'), 10);
         const rem = parseInt(res.headers.get('X-RateLimit-Remaining'), 10);
+        const fallback = res.headers.get('X-Limiter-Fallback');
+        if (fallback) { state.sim.fallback = fallback; state.sim.fallbackAt = Date.now(); }
         if (!Number.isNaN(lim)) state.sim.lastLimit = lim;
         if (!Number.isNaN(rem)) {
           if (state.sim.lastRemaining == null || Date.now() - state.sim.windowStart > WINDOW_S * 1000 || rem > state.sim.lastRemaining) state.sim.windowStart = Date.now();
@@ -973,12 +997,14 @@
         }
         if (res.status === 429) {
           state.sim.bad++; bucket('bad');
-          const ra = parseInt(res.headers.get('Retry-After'), 10);
-          state.sim.throttleUntil = Date.now() + (Number.isNaN(ra) ? WINDOW_S : ra) * 1000;
+          if (!fallback) {
+            const ra = parseInt(res.headers.get('Retry-After'), 10);
+            state.sim.throttleUntil = Date.now() + (Number.isNaN(ra) ? WINDOW_S : ra) * 1000;
+          }
         } else if (res.ok) { state.sim.ok++; bucket('ok'); state.sim.latSum += lat; state.sim.latN++; }
         else { state.sim.bad++; bucket('bad'); }
       } catch { state.sim.bad++; bucket('bad'); }
-      renderKpis(); renderChart(); renderWindow(); renderThrottle();
+      renderKpis(); renderChart(); renderWindow(); renderThrottle(); renderOutage();
     }
     function setStream(on) {
       clearInterval(state.sim.streamTimer); state.sim.streamTimer = null;
@@ -1043,6 +1069,32 @@
       $('chaos-status').innerHTML = d?.detected
         ? `<span style="color:var(--warn)">● Drift present.</span> ${esc(d.details || '')}<br><span class="faint">Next: run step 2.</span>`
         : `<span style="color:var(--ok)">● In sync.</span> Redis matches the PostgreSQL event log.${state.chaos ? '<br><span class="faint">' + esc(state.chaos) + '</span>' : ''}`;
+    }
+
+    // ---------- Redis outage drill ----------
+    function renderOutage() {
+      const left = Math.ceil((state.outageUntil - Date.now()) / 1000);
+      const on = left > 0;
+      $('alert-outage').hidden = !on;
+      if (on) $('outage-left').textContent = left;
+      $('outage-start').hidden = on;
+      $('outage-stop').hidden = !on;
+      const fb = state.sim.fallback && Date.now() - state.sim.fallbackAt < 3000;
+      $('sim-fallback').hidden = !fb;
+      if (fb) {
+        $('sim-fallback-text').innerHTML = state.sim.fallback === 'fail-open'
+          ? '<b>Redis unreachable.</b> This org is <b>fail-open</b>: requests are let through without being counted.'
+          : '<b>Redis unreachable.</b> This org is <b>fail-closed</b>: requests are refused (429 RATE_LIMITER_DEGRADED).';
+      }
+    }
+    async function outage(on, btn) {
+      busy(btn, true, on ? 'Starting…' : 'Ending…');
+      try {
+        const r = await api('/api/dashboard/chaos/redis-outage', on ? { method: 'POST', body: JSON.stringify({ seconds: 30 }) } : { method: 'DELETE' });
+        state.outageUntil = on ? r.data.endsAt : 0;
+        toast(on ? 'Redis outage started' : 'Redis outage ended', on ? 'Send requests as Alpha and Beta to compare fail-open and fail-closed.' : 'The rate limiter uses Redis again.');
+      } catch (err) { toast("Couldn't change the outage drill", err.message, true); }
+      finally { busy(btn, false); renderOutage(); renderNavBadges(); }
     }
 
     // ---------- 1s ticker ----------
@@ -1122,6 +1174,8 @@
       else if (ds.release) act(`/api/dashboard/leases/${ds.release}`, 'DELETE', 'Lease released', 'Quota returned to the pool.', "Couldn't release", t);
       else if (ds.action === 'desync') desync(t);
       else if (ds.action === 'reconcile') reconcile(t);
+      else if (ds.action === 'outage-start') outage(true, t);
+      else if (ds.action === 'outage-stop') outage(false, t);
       else if ('toggleLoans' in ds) { state.showSettledLoans = !state.showSettledLoans; render(); }
       else if ('toggleLeases' in ds) { state.showSettledLeases = !state.showSettledLeases; render(); }
       else if (ds.f) { state.feedFilter = ds.f; $$('#feed-filter button').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); render(); }
@@ -1160,7 +1214,7 @@
     $$('[data-pools]').forEach((el) => { el.innerHTML = skel + '<div></div>' + skel; });
     ['loans-list', 'leases-list', 'feed', 'feed-mini', 'repairs'].forEach((id) => { $(id).innerHTML = '<div class="empty">Loading…</div>'; });
     route(); renderChart(); renderKpis();
-    setInterval(() => { tick(); renderLive(); renderThrottle(); renderChart(); renderNavBadges(); if (state.data) renderOverviewAreas(); if (state.sim.lastRemaining != null) renderWindow(); }, 1000);
+    setInterval(() => { tick(); renderLive(); renderThrottle(); renderChart(); renderNavBadges(); renderOutage(); if (state.data) renderOverviewAreas(); if (state.sim.lastRemaining != null) renderWindow(); }, 1000);
     poll().then(startPolling);
   </script>
 </body>
