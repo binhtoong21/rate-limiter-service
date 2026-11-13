@@ -19,6 +19,9 @@ export const startLeaseExpiryWorker = async () => {
   const leaseExpiryQueue = new Queue('lease-expiry', { connection: connection as any });
 
   const leaseExpiryWorker = new Worker('lease-expiry', async (job) => {
+  // Heartbeat: the dashboard shows a warning when no worker has run recently (job runs every 30s)
+  await defaultRedis.set('workers:heartbeat', Date.now().toString(), 'EX', 90);
+
   // 1. SELECT expired leases (status='active' AND expires_at < NOW()) LIMIT 100
   const expiredLeases = await db
     .select()

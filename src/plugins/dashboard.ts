@@ -10,7 +10,7 @@ import { redis } from '../redis';
 import { AuthService } from '../services/auth.service';
 import { LoanService } from '../services/loan.service';
 import { QuotaService } from '../services/quota.service';
-import { eq, desc, and, or, sql } from 'drizzle-orm';
+import { eq, desc, and, or, sql, inArray } from 'drizzle-orm';
 import { PING_BASE_LIMIT, PING_WINDOW_MS } from '../config/rate-limits';
 import { chaosAllowed, startRedisOutage, stopRedisOutage, redisOutageEndsAt } from '../chaos/redis-outage';
 import { reconcileOrg } from '../services/reconciliation.service';
@@ -377,12 +377,29 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
             releasedAt: ls.releasedAt,
           }));
 
-          // Read recent events
-          const dbEvents = await db
+          // Read recent events. A loan action writes one event per org; keep only the actor's event
+          // (lender for create/cancel/expire, borrower for repay) so the feed shows each action once.
+          const rawEvents = await db
             .select()
             .from(quotaEvents)
             .orderBy(desc(quotaEvents.createdAt))
-            .limit(50);
+            .limit(100);
+          const loanIds = [...new Set(rawEvents.map((e) => e.loanId).filter((id): id is string => !!id))];
+          const loanParties = loanIds.length
+            ? await db
+                .select({ id: loans.id, lenderOrgId: loans.lenderOrgId, borrowerOrgId: loans.borrowerOrgId })
+                .from(loans)
+                .where(inArray(loans.id, loanIds))
+            : [];
+          const partiesById = new Map(loanParties.map((l) => [l.id, l]));
+          const dbEvents = rawEvents
+            .filter((e) => {
+              const loan = e.loanId ? partiesById.get(e.loanId) : undefined;
+              if (!loan || !['LOAN_CREATE', 'LOAN_REPAY', 'LOAN_CANCEL', 'LOAN_EXPIRE'].includes(e.eventType)) return true;
+              const actor = e.eventType === 'LOAN_REPAY' ? loan.borrowerOrgId : loan.lenderOrgId;
+              return e.orgId === actor;
+            })
+            .slice(0, 50);
 
           eventsData = dbEvents.map((e) => ({
             id: e.id,
@@ -390,6 +407,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
             orgId: e.orgId,
             orgName: e.orgId === alpha.id ? alpha.name : beta.name,
             counterpartOrgId: e.counterpartOrgId,
+            loanId: e.loanId,
             amount: e.amount,
             balanceAfter: e.balanceAfter,
             idempotencyKey: e.idempotencyKey,
@@ -402,10 +420,16 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
       }
     }
 
+    let workersAlive = false;
+    if (isHealthy) {
+      workersAlive = Boolean(await redis.get('workers:heartbeat').catch(() => null));
+    }
+
     return reply.send({
       success: true,
       data: {
         system: health,
+        workers: { alive: workersAlive },
         degraded: !isHealthy,
         organizations: orgsData,
         loans: loansData,
