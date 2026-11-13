@@ -12,131 +12,9 @@ import { LoanService } from '../services/loan.service';
 import { QuotaService } from '../services/quota.service';
 import { eq, desc, and, or, sql } from 'drizzle-orm';
 import { PING_BASE_LIMIT, PING_WINDOW_MS } from '../config/rate-limits';
+import { reconcileOrg } from '../services/reconciliation.service';
 
-interface PoolState {
-  total: number;
-  available: number;
-  reserved: number;
-  loanedOut: number;
-  received: number;
-}
 
-interface InMemOrg {
-  id: string;
-  name: string;
-  slug: string;
-  failOpen: boolean;
-  apiKey: string;
-  serviceId: string;
-  pool: PoolState;
-}
-
-interface InMemLoan {
-  id: string;
-  lenderOrgId: string;
-  lenderName: string;
-  borrowerOrgId: string;
-  borrowerName: string;
-  amount: number;
-  status: 'active' | 'repaid' | 'cancelled' | 'expired';
-  note?: string;
-  expiresAt: string;
-  createdAt: string;
-  settledAt?: string;
-}
-
-interface InMemLease {
-  id: string;
-  orgId: string;
-  orgName: string;
-  serviceId: string;
-  amount: number;
-  status: 'active' | 'released' | 'expired';
-  claimedAt: string;
-  expiresAt: string;
-  releasedAt?: string;
-}
-
-interface InMemEvent {
-  id: string;
-  eventType: string;
-  orgId: string;
-  counterpartOrgId?: string;
-  amount: number;
-  balanceAfter: number;
-  idempotencyKey?: string;
-  metadata?: any;
-  createdAt: string;
-}
-
-// In-memory fallback store
-const fallbackStore: {
-  orgs: InMemOrg[];
-  loans: InMemLoan[];
-  leases: InMemLease[];
-  events: InMemEvent[];
-  simulatedDesync: {
-    active: boolean;
-    orgId?: string;
-    orgName?: string;
-    driftAmount?: number;
-    timestamp?: number;
-  };
-} = {
-  orgs: [
-    {
-      id: '11111111-1111-1111-1111-111111111111',
-      name: 'Organization Alpha',
-      slug: 'alpha',
-      failOpen: true,
-      apiKey: 'pk_test_alpha_00000000000000000000000000000001',
-      serviceId: '11111111-1111-1111-1111-111111111112',
-      pool: {
-        total: 10000,
-        available: 10000,
-        reserved: 0,
-        loanedOut: 0,
-        received: 0,
-      },
-    },
-    {
-      id: '22222222-2222-2222-2222-222222222222',
-      name: 'Organization Beta',
-      slug: 'beta',
-      failOpen: false,
-      apiKey: 'pk_test_beta_00000000000000000000000000000002',
-      serviceId: '22222222-2222-2222-2222-222222222223',
-      pool: {
-        total: 5000,
-        available: 5000,
-        reserved: 0,
-        loanedOut: 0,
-        received: 0,
-      },
-    },
-  ],
-  loans: [],
-  leases: [],
-  events: [
-    {
-      id: crypto.randomUUID(),
-      eventType: 'ALLOCATION_ADJUST',
-      orgId: '11111111-1111-1111-1111-111111111111',
-      amount: 10000,
-      balanceAfter: 10000,
-      createdAt: new Date(Date.now() - 3600000).toISOString(),
-    },
-    {
-      id: crypto.randomUUID(),
-      eventType: 'ALLOCATION_ADJUST',
-      orgId: '22222222-2222-2222-2222-222222222222',
-      amount: 5000,
-      balanceAfter: 5000,
-      createdAt: new Date(Date.now() - 3500000).toISOString(),
-    },
-  ],
-  simulatedDesync: { active: false },
-};
 
 export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
   const publicDir = path.join(process.cwd(), 'public');
@@ -311,11 +189,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
         // Redis might be unreachable
       }
 
-      // Update in-memory reference to match real DB IDs
-      fallbackStore.orgs[0].id = alpha.id;
-      fallbackStore.orgs[0].serviceId = alphaService.id;
-      fallbackStore.orgs[1].id = beta.id;
-      fallbackStore.orgs[1].serviceId = betaService.id;
+
 
       return {
         alpha,
@@ -376,10 +250,8 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     let loansData: any[] = [];
     let leasesData: any[] = [];
     let eventsData: any[] = [];
-    let desyncDetected = fallbackStore.simulatedDesync.active;
-    let desyncDetails = fallbackStore.simulatedDesync.active
-      ? `Simulated Redis desync active on ${fallbackStore.simulatedDesync.orgName || 'pool'}: discrepancy of ${fallbackStore.simulatedDesync.driftAmount || 1000} units`
-      : '';
+    let desyncDetected = false;
+    let desyncDetails = '';
 
     if (isHealthy) {
       try {
@@ -512,18 +384,11 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
       }
     }
 
-    // Fallback if data is empty or degraded
-    if (orgsData.length === 0) {
-      orgsData = fallbackStore.orgs;
-      loansData = fallbackStore.loans;
-      leasesData = fallbackStore.leases;
-      eventsData = fallbackStore.events;
-    }
-
     return reply.send({
       success: true,
       data: {
         system: health,
+        degraded: !isHealthy,
         organizations: orgsData,
         loans: loansData,
         leases: leasesData,
@@ -540,11 +405,49 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     });
   });
 
+  // Every mutation needs both stores: PostgreSQL holds the record, Redis the live counters.
+  async function requireHealthy(reply: FastifyReply): Promise<boolean> {
+    const health = await checkSystemHealth();
+    if (health.status === 'healthy') return true;
+    reply.status(503).send({
+      success: false,
+      error: {
+        code: 'DEPENDENCY_UNAVAILABLE',
+        message: `PostgreSQL is ${health.postgres} and Redis is ${health.redis}. Start them with "docker compose up -d".`,
+      },
+    });
+    return false;
+  }
+
+  // Map service errors to honest HTTP responses instead of hiding them
+  function sendServiceError(reply: FastifyReply, err: any, defaultCode: string) {
+    const message: string = err?.message || 'Unexpected error';
+    let status = 500;
+    let code = defaultCode;
+    if (err?.name === 'NotFoundError' || /not found/i.test(message)) {
+      status = 404;
+      code = 'NOT_FOUND';
+    } else if (err?.name === 'InsufficientQuotaError' || message === 'INSUFFICIENT_QUOTA') {
+      status = 422;
+      code = 'INSUFFICIENT_QUOTA';
+    } else if (err?.name === 'ConflictError' || /ALREADY_(SETTLED|RELEASED)|RACE_CONDITION/.test(message)) {
+      status = 409;
+      code = 'CONFLICT';
+    } else if (message === 'SELF_LOAN' || /must be a positive integer/.test(message)) {
+      status = 400;
+      code = 'INVALID_PARAMETERS';
+    }
+    if (status === 500) fastify.log.error({ err }, `Dashboard action failed: ${defaultCode}`);
+    return reply.status(status).send({ success: false, error: { code, message } });
+  }
+
+  const newKey = (prefix: string) => `dash-${prefix}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+
   // --- API ROUTE: POST /api/dashboard/loans ---
   fastify.post<{
     Body: { lenderOrgId: string; borrowerOrgId: string; amount: number; ttlSeconds?: number; note?: string };
   }>('/api/dashboard/loans', async (req, reply) => {
-    const { lenderOrgId, borrowerOrgId, amount, ttlSeconds = 3600, note } = req.body || {};
+    const { lenderOrgId, borrowerOrgId, amount, ttlSeconds = 3600, note } = req.body || ({} as any);
 
     if (!lenderOrgId || !borrowerOrgId || lenderOrgId === borrowerOrgId) {
       return reply.status(400).send({
@@ -552,208 +455,56 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
         error: { code: 'INVALID_PARAMETERS', message: 'Lender and Borrower must be different organizations' },
       });
     }
-
-    if (!amount || amount <= 0) {
+    if (!Number.isInteger(amount) || amount <= 0) {
       return reply.status(400).send({
         success: false,
         error: { code: 'INVALID_AMOUNT', message: 'Amount must be a positive integer' },
       });
     }
-
-    const idempotencyKey = `dash-loan-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    if (!(await requireHealthy(reply))) return reply;
 
     try {
-      const loanService = new LoanService(fastify);
-      const newLoan = await loanService.createLoan({
+      const loan = await new LoanService(fastify).createLoan({
         lenderOrgId,
         borrowerOrgId,
         amount,
         ttlSeconds,
         note: note || 'Dashboard Quota Transfer',
-        idempotencyKey,
+        idempotencyKey: newKey('loan'),
       });
-
-      return reply.status(201).send({
-        success: true,
-        data: newLoan,
-        message: `Successfully transferred ${amount} quota from ${lenderOrgId} to ${borrowerOrgId}`,
-      });
-    } catch (err: any) {
-      // In-memory fallback
-      const lender = fallbackStore.orgs.find((o) => o.id === lenderOrgId);
-      const borrower = fallbackStore.orgs.find((o) => o.id === borrowerOrgId);
-
-      if (lender && borrower) {
-        if (lender.pool.available < amount) {
-          return reply.status(422).send({
-            success: false,
-            error: { code: 'INSUFFICIENT_QUOTA', message: 'Lender does not have enough available quota' },
-          });
-        }
-
-        lender.pool.available -= amount;
-        lender.pool.loanedOut += amount;
-        borrower.pool.received += amount;
-        borrower.pool.available += amount;
-
-        const fakeLoan: InMemLoan = {
-          id: crypto.randomUUID(),
-          lenderOrgId,
-          lenderName: lender.name,
-          borrowerOrgId,
-          borrowerName: borrower.name,
-          amount,
-          status: 'active',
-          note: note || 'Dashboard Quota Transfer',
-          expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
-          createdAt: new Date().toISOString(),
-        };
-
-        fallbackStore.loans.unshift(fakeLoan);
-        fallbackStore.events.unshift({
-          id: crypto.randomUUID(),
-          eventType: 'LOAN_CREATE',
-          orgId: lenderOrgId,
-          counterpartOrgId: borrowerOrgId,
-          amount,
-          balanceAfter: lender.pool.available,
-          idempotencyKey,
-          createdAt: new Date().toISOString(),
-        });
-
-        return reply.status(201).send({
-          success: true,
-          data: fakeLoan,
-          message: `Transferred ${amount} quota from ${lender.name} to ${borrower.name}`,
-        });
-      }
-
-      return reply.status(500).send({
-        success: false,
-        error: { code: 'LOAN_CREATION_FAILED', message: err.message || 'Failed to create loan' },
-      });
+      return reply.status(201).send({ success: true, data: loan, message: `Transferred ${amount} quota` });
+    } catch (err) {
+      return sendServiceError(reply, err, 'LOAN_CREATION_FAILED');
     }
   });
 
   // --- API ROUTE: POST /api/dashboard/loans/:id/repay ---
-  fastify.post<{
-    Params: { id: string };
-  }>('/api/dashboard/loans/:id/repay', async (req, reply) => {
-    const { id } = req.params;
-    const idempotencyKey = `dash-repay-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-
+  fastify.post<{ Params: { id: string } }>('/api/dashboard/loans/:id/repay', async (req, reply) => {
+    if (!(await requireHealthy(reply))) return reply;
     try {
-      const loanService = new LoanService(fastify);
-      const settled = await loanService.settleLoan({
-        loanId: id,
+      const settled = await new LoanService(fastify).settleLoan({
+        loanId: req.params.id,
         settleType: 'repay',
-        idempotencyKey,
+        idempotencyKey: newKey('repay'),
       });
-
-      return reply.send({
-        success: true,
-        data: settled,
-        message: 'Loan successfully repaid and quota returned',
-      });
-    } catch (err: any) {
-      // In-memory fallback
-      const loan = fallbackStore.loans.find((l) => l.id === id);
-      if (loan && loan.status === 'active') {
-        loan.status = 'repaid';
-        loan.settledAt = new Date().toISOString();
-
-        const lender = fallbackStore.orgs.find((o) => o.id === loan.lenderOrgId);
-        const borrower = fallbackStore.orgs.find((o) => o.id === loan.borrowerOrgId);
-
-        if (lender && borrower) {
-          lender.pool.available += loan.amount;
-          lender.pool.loanedOut = Math.max(0, lender.pool.loanedOut - loan.amount);
-          borrower.pool.received = Math.max(0, borrower.pool.received - loan.amount);
-          borrower.pool.available = Math.max(0, borrower.pool.available - loan.amount);
-        }
-
-        fallbackStore.events.unshift({
-          id: crypto.randomUUID(),
-          eventType: 'LOAN_REPAY',
-          orgId: loan.borrowerOrgId,
-          counterpartOrgId: loan.lenderOrgId,
-          amount: loan.amount,
-          balanceAfter: borrower ? borrower.pool.available : 0,
-          createdAt: new Date().toISOString(),
-        });
-
-        return reply.send({
-          success: true,
-          data: loan,
-          message: 'Loan repaid in fallback mode',
-        });
-      }
-
-      return reply.status(400).send({
-        success: false,
-        error: { code: 'SETTLE_FAILED', message: err.message || 'Failed to repay loan' },
-      });
+      return reply.send({ success: true, data: settled, message: 'Loan repaid and quota returned to the lender' });
+    } catch (err) {
+      return sendServiceError(reply, err, 'SETTLE_FAILED');
     }
   });
 
   // --- API ROUTE: POST /api/dashboard/loans/:id/cancel ---
-  fastify.post<{
-    Params: { id: string };
-  }>('/api/dashboard/loans/:id/cancel', async (req, reply) => {
-    const { id } = req.params;
-    const idempotencyKey = `dash-cancel-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-
+  fastify.post<{ Params: { id: string } }>('/api/dashboard/loans/:id/cancel', async (req, reply) => {
+    if (!(await requireHealthy(reply))) return reply;
     try {
-      const loanService = new LoanService(fastify);
-      const settled = await loanService.settleLoan({
-        loanId: id,
+      const settled = await new LoanService(fastify).settleLoan({
+        loanId: req.params.id,
         settleType: 'cancel',
-        idempotencyKey,
+        idempotencyKey: newKey('cancel'),
       });
-
-      return reply.send({
-        success: true,
-        data: settled,
-        message: 'Loan successfully cancelled and quota reclaimed',
-      });
-    } catch (err: any) {
-      // In-memory fallback
-      const loan = fallbackStore.loans.find((l) => l.id === id);
-      if (loan && loan.status === 'active') {
-        loan.status = 'cancelled';
-        loan.settledAt = new Date().toISOString();
-
-        const lender = fallbackStore.orgs.find((o) => o.id === loan.lenderOrgId);
-        const borrower = fallbackStore.orgs.find((o) => o.id === loan.borrowerOrgId);
-
-        if (lender && borrower) {
-          lender.pool.available += loan.amount;
-          lender.pool.loanedOut = Math.max(0, lender.pool.loanedOut - loan.amount);
-          borrower.pool.received = Math.max(0, borrower.pool.received - loan.amount);
-          borrower.pool.available = Math.max(0, borrower.pool.available - loan.amount);
-        }
-
-        fallbackStore.events.unshift({
-          id: crypto.randomUUID(),
-          eventType: 'LOAN_CANCEL',
-          orgId: loan.lenderOrgId,
-          counterpartOrgId: loan.borrowerOrgId,
-          amount: loan.amount,
-          balanceAfter: lender ? lender.pool.available : 0,
-          createdAt: new Date().toISOString(),
-        });
-
-        return reply.send({
-          success: true,
-          data: loan,
-          message: 'Loan cancelled in fallback mode',
-        });
-      }
-
-      return reply.status(400).send({
-        success: false,
-        error: { code: 'CANCEL_FAILED', message: err.message || 'Failed to cancel loan' },
-      });
+      return reply.send({ success: true, data: settled, message: 'Loan cancelled and quota reclaimed by the lender' });
+    } catch (err) {
+      return sendServiceError(reply, err, 'CANCEL_FAILED');
     }
   });
 
@@ -761,375 +512,96 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
   fastify.post<{
     Body: { orgId: string; amount: number; ttlSeconds?: number };
   }>('/api/dashboard/leases', async (req, reply) => {
-    const { orgId, amount, ttlSeconds = 60 } = req.body || {};
-
-    if (!orgId || !amount || amount <= 0) {
+    const { orgId, amount, ttlSeconds = 60 } = req.body || ({} as any);
+    if (!orgId || !Number.isInteger(amount) || amount <= 0) {
       return reply.status(400).send({
         success: false,
-        error: { code: 'INVALID_PARAMETERS', message: 'Organization and positive amount are required' },
+        error: { code: 'INVALID_PARAMETERS', message: 'Organization and a positive integer amount are required' },
       });
     }
-
-    const idempotencyKey = `dash-lease-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    if (!(await requireHealthy(reply))) return reply;
 
     try {
-      const quotaService = new QuotaService(fastify);
-
-      // Find service for org
       const [service] = await db.select().from(services).where(eq(services.orgId, orgId)).limit(1);
       if (!service) {
-        throw new Error('Service not found for organization');
+        return reply.status(404).send({
+          success: false,
+          error: { code: 'NOT_FOUND', message: 'No service found for this organization' },
+        });
       }
-
-      const lease = await quotaService.claimLease({
+      const lease = await new QuotaService(fastify).claimLease({
         orgId,
         serviceId: service.id,
         amount,
         ttlSeconds,
-        idempotencyKey,
+        idempotencyKey: newKey('lease'),
       });
-
-      return reply.status(201).send({
-        success: true,
-        data: lease,
-        message: `Claimed lease for ${amount} quota (TTL: ${ttlSeconds}s)`,
-      });
-    } catch (err: any) {
-      // In-memory fallback
-      const org = fallbackStore.orgs.find((o) => o.id === orgId);
-      if (org) {
-        if (org.pool.available < amount) {
-          return reply.status(422).send({
-            success: false,
-            error: { code: 'INSUFFICIENT_QUOTA', message: 'Not enough available quota in organization pool' },
-          });
-        }
-
-        org.pool.available -= amount;
-        org.pool.reserved += amount;
-
-        const fakeLease: InMemLease = {
-          id: crypto.randomUUID(),
-          orgId,
-          orgName: org.name,
-          serviceId: org.serviceId,
-          amount,
-          status: 'active',
-          claimedAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + ttlSeconds * 1000).toISOString(),
-        };
-
-        fallbackStore.leases.unshift(fakeLease);
-        fallbackStore.events.unshift({
-          id: crypto.randomUUID(),
-          eventType: 'LEASE_CLAIM',
-          orgId,
-          amount,
-          balanceAfter: org.pool.available,
-          idempotencyKey,
-          createdAt: new Date().toISOString(),
-        });
-
-        return reply.status(201).send({
-          success: true,
-          data: fakeLease,
-          message: `Claimed lease for ${amount} quota (fallback mode)`,
-        });
-      }
-
-      return reply.status(500).send({
-        success: false,
-        error: { code: 'LEASE_CLAIM_FAILED', message: err.message || 'Failed to claim lease' },
-      });
+      return reply.status(201).send({ success: true, data: lease, message: `Claimed lease for ${amount} quota (TTL: ${ttlSeconds}s)` });
+    } catch (err) {
+      return sendServiceError(reply, err, 'LEASE_CLAIM_FAILED');
     }
   });
 
   // --- API ROUTE: DELETE /api/dashboard/leases/:id ---
-  fastify.delete<{
-    Params: { id: string };
-  }>('/api/dashboard/leases/:id', async (req, reply) => {
-    const { id } = req.params;
-
+  fastify.delete<{ Params: { id: string } }>('/api/dashboard/leases/:id', async (req, reply) => {
+    if (!(await requireHealthy(reply))) return reply;
     try {
-      const quotaService = new QuotaService(fastify);
-
-      // Find lease to get serviceId
-      const [existingLease] = await db.select().from(leases).where(eq(leases.id, id)).limit(1);
+      const [existingLease] = await db.select().from(leases).where(eq(leases.id, req.params.id)).limit(1);
       if (!existingLease) {
-        throw new Error('Lease not found in database');
+        return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Lease not found' } });
       }
-
-      const released = await quotaService.releaseLease({
-        leaseId: id,
+      const released = await new QuotaService(fastify).releaseLease({
+        leaseId: req.params.id,
         serviceId: existingLease.serviceId,
       });
-
-      return reply.send({
-        success: true,
-        data: released,
-        message: 'Lease released successfully',
-      });
-    } catch (err: any) {
-      // In-memory fallback
-      const lease = fallbackStore.leases.find((ls) => ls.id === id);
-      if (lease && lease.status === 'active') {
-        lease.status = 'released';
-        lease.releasedAt = new Date().toISOString();
-
-        const org = fallbackStore.orgs.find((o) => o.id === lease.orgId);
-        if (org) {
-          org.pool.reserved = Math.max(0, org.pool.reserved - lease.amount);
-          org.pool.available += lease.amount;
-        }
-
-        fallbackStore.events.unshift({
-          id: crypto.randomUUID(),
-          eventType: 'LEASE_RELEASE',
-          orgId: lease.orgId,
-          amount: lease.amount,
-          balanceAfter: org ? org.pool.available : 0,
-          createdAt: new Date().toISOString(),
-        });
-
-        return reply.send({
-          success: true,
-          data: lease,
-          message: 'Lease released in fallback mode',
-        });
-      }
-
-      return reply.status(400).send({
-        success: false,
-        error: { code: 'RELEASE_FAILED', message: err.message || 'Failed to release lease' },
-      });
+      return reply.send({ success: true, data: released, message: 'Lease released' });
+    } catch (err) {
+      return sendServiceError(reply, err, 'RELEASE_FAILED');
     }
   });
 
   // --- API ROUTE: POST /api/dashboard/chaos/desync ---
+  // Tampers with Redis only (no quota_events row), so Redis and PostgreSQL disagree on purpose.
   fastify.post('/api/dashboard/chaos/desync', async (req, reply) => {
     const driftAmount = 1500;
+    if (!(await requireHealthy(reply))) return reply;
     try {
-      // Pick Org Alpha to desync
       const [alpha] = await db.select().from(organizations).where(eq(organizations.slug, 'alpha')).limit(1);
-      const targetOrgId = alpha ? alpha.id : fallbackStore.orgs[0].id;
-      const targetName = alpha ? alpha.name : fallbackStore.orgs[0].name;
-
-      // Tamper directly with Redis without PG event!
-      try {
-        const curAvail = await redis.get(`quota:pool:${targetOrgId}:available`);
-        const tampered = Math.max(0, parseInt(curAvail || '10000', 10) - driftAmount);
-        await redis.set(`quota:pool:${targetOrgId}:available`, tampered.toString());
-      } catch (e) {
-        // Redis error
+      if (!alpha) {
+        return reply.status(404).send({ success: false, error: { code: 'NOT_FOUND', message: 'Organization alpha not found' } });
       }
-
-      fallbackStore.simulatedDesync = {
-        active: true,
-        orgId: targetOrgId,
-        orgName: targetName,
-        driftAmount,
-        timestamp: Date.now(),
-      };
-
-      // Also modify in-memory pool for visible UI effect
-      const inMemAlpha = fallbackStore.orgs.find((o) => o.id === targetOrgId);
-      if (inMemAlpha) {
-        inMemAlpha.pool.available = Math.max(0, inMemAlpha.pool.available - driftAmount);
-      }
-
+      const key = `quota:pool:${alpha.id}:available`;
+      const before = parseInt((await redis.get(key)) || '0', 10);
+      const after = Math.max(0, before - driftAmount);
+      await redis.set(key, after.toString());
       return reply.send({
         success: true,
-        message: 'Redis state intentionally desynced! Divergence detected against PostgreSQL Ground Truth.',
-        data: fallbackStore.simulatedDesync,
+        message: 'Redis available counter changed without a PostgreSQL event',
+        data: { orgId: alpha.id, orgName: alpha.name, before, after, driftAmount: before - after },
       });
-    } catch (err: any) {
-      fallbackStore.simulatedDesync = {
-        active: true,
-        orgName: 'Organization Alpha',
-        driftAmount,
-        timestamp: Date.now(),
-      };
-      return reply.send({
-        success: true,
-        message: 'Simulated desync activated.',
-      });
+    } catch (err) {
+      return sendServiceError(reply, err, 'CHAOS_FAILED');
     }
   });
 
   // --- API ROUTE: POST /api/dashboard/chaos/reconcile ---
+  // Runs the same per-org reconciliation as the 60s background worker.
   fastify.post('/api/dashboard/chaos/reconcile', async (req, reply) => {
-    let correctedCount = 0;
-
+    if (!(await requireHealthy(reply))) return reply;
     try {
-      // Run actual reconciliation
       const allOrgs = await db.select().from(organizations);
-
+      let correctedCount = 0;
       for (const org of allOrgs) {
-        let expectedTotal = org.quotaAllocated;
-        let expectedReserved = 0;
-        let expectedLoanedOut = 0;
-        let expectedReceived = 0;
-
-        const events = await db
-          .select({
-            event: quotaEvents,
-            loan: loans,
-          })
-          .from(quotaEvents)
-          .leftJoin(loans, eq(quotaEvents.loanId, loans.id))
-          .where(eq(quotaEvents.orgId, org.id));
-
-        for (const { event, loan: l } of events) {
-          switch (event.eventType) {
-            case 'LEASE_CLAIM':
-              expectedReserved += event.amount;
-              break;
-            case 'LEASE_RELEASE':
-            case 'LEASE_EXPIRE':
-              expectedReserved = Math.max(0, expectedReserved - event.amount);
-              break;
-            case 'LOAN_CREATE':
-              if (l && org.id === l.lenderOrgId) {
-                expectedLoanedOut += event.amount;
-              } else if (l && org.id === l.borrowerOrgId) {
-                expectedReceived += event.amount;
-              }
-              break;
-            case 'LOAN_REPAY':
-            case 'LOAN_CANCEL':
-            case 'LOAN_EXPIRE':
-              if (l && org.id === l.lenderOrgId) {
-                expectedLoanedOut = Math.max(0, expectedLoanedOut - event.amount);
-              } else if (l && org.id === l.borrowerOrgId) {
-                expectedReceived = Math.max(0, expectedReceived - event.amount);
-              }
-              break;
-          }
-        }
-
-        const expectedAvailable = expectedTotal - expectedReserved - expectedLoanedOut + expectedReceived;
-
-        // Reset Redis keys
-        try {
-          const pipe = redis.pipeline();
-          pipe.set(`quota:pool:${org.id}:total`, expectedTotal.toString());
-          pipe.set(`quota:pool:${org.id}:available`, expectedAvailable.toString());
-          pipe.set(`quota:pool:${org.id}:reserved`, expectedReserved.toString());
-          pipe.set(`quota:lease:active_sum:${org.id}`, expectedReserved.toString());
-          pipe.set(`quota:pool:${org.id}:loaned_out`, expectedLoanedOut.toString());
-          pipe.set(`quota:pool:${org.id}:received`, expectedReceived.toString());
-          await pipe.exec();
-        } catch (e) {
-          // ignore
-        }
-
-        // Insert RECONCILIATION_CORRECTION event in Postgres
-        await db
-          .insert(quotaEvents)
-          .values({
-            eventType: 'RECONCILIATION_CORRECTION',
-            orgId: org.id,
-            amount: 0,
-            balanceAfter: expectedAvailable,
-            metadata: {
-              reconciledAt: new Date().toISOString(),
-              source: 'Dashboard Triggered Self-Healing',
-            },
-          })
-          .catch(() => {});
-
-        correctedCount++;
+        const result = await reconcileOrg(org);
+        if (result.drifted) correctedCount++;
       }
-    } catch (e) {
-      // Fallback reconciliation
-    }
-
-    // Reset fallback stores
-    for (const org of fallbackStore.orgs) {
-      org.pool.available = org.pool.total - org.pool.reserved - org.pool.loanedOut + org.pool.received;
-    }
-
-    fallbackStore.simulatedDesync = { active: false };
-
-    fallbackStore.events.unshift({
-      id: crypto.randomUUID(),
-      eventType: 'RECONCILIATION_CORRECTION',
-      orgId: fallbackStore.orgs[0].id,
-      amount: 0,
-      balanceAfter: fallbackStore.orgs[0].pool.available,
-      metadata: { reconciledAt: new Date().toISOString(), healed: true },
-      createdAt: new Date().toISOString(),
-    });
-
-    return reply.send({
-      success: true,
-      message: 'Reconciliation completed! Redis Materialized View synchronized with PostgreSQL Ground Truth.',
-      correctedCount: Math.max(1, correctedCount),
-    });
-  });
-
-  // --- API ROUTE: POST /api/dashboard/ping-proxy ---
-  // A dedicated rate-limited ping endpoint for the visual simulator when called directly
-  fastify.post('/api/dashboard/ping-proxy', async (req: FastifyRequest, reply: FastifyReply) => {
-    const apiKey = (req.headers['x-api-key'] as string) || '';
-    const now = Date.now();
-
-    // Determine org from key
-    let orgSlug = 'alpha';
-    if (apiKey.includes('beta')) {
-      orgSlug = 'beta';
-    }
-
-    const org = fallbackStore.orgs.find((o) => o.slug === orgSlug) || fallbackStore.orgs[0];
-    const baseLimit = PING_BASE_LIMIT;
-    const effectiveLimit = baseLimit + org.pool.reserved;
-
-    // Check sliding window simulation
-    const winKey = `sim:win:${org.id}:${Math.floor(now / PING_WINDOW_MS)}`;
-    let count = 0;
-
-    try {
-      if (redis.status === 'ready') {
-        count = await redis.incr(winKey);
-        if (count === 1) await redis.pexpire(winKey, PING_WINDOW_MS * 2);
-      } else {
-        // in-memory window count
-        (global as any).__simCounts = (global as any).__simCounts || {};
-        (global as any).__simCounts[winKey] = ((global as any).__simCounts[winKey] || 0) + 1;
-        count = (global as any).__simCounts[winKey];
-      }
-    } catch {
-      count = 1;
-    }
-
-    const remaining = Math.max(0, effectiveLimit - count);
-    reply.header('X-RateLimit-Limit', effectiveLimit);
-    reply.header('X-RateLimit-Remaining', remaining);
-
-    if (count > effectiveLimit) {
-      const resetInSeconds = Math.ceil((PING_WINDOW_MS - (now % PING_WINDOW_MS)) / 1000);
-      reply.header('Retry-After', resetInSeconds);
-      return reply.status(429).send({
-        success: false,
-        error: {
-          code: 'RATE_LIMIT_EXCEEDED',
-          message: 'Rate limit exceeded',
-        },
-        meta: {
-          effectiveLimit,
-          remaining: 0,
-          retryAfter: resetInSeconds,
-        },
+      return reply.send({
+        success: true,
+        message: correctedCount ? `Corrected ${correctedCount} organization(s)` : 'Redis already matches PostgreSQL',
+        correctedCount,
       });
+    } catch (err) {
+      return sendServiceError(reply, err, 'RECONCILIATION_FAILED');
     }
-
-    return reply.send({
-      message: 'pong',
-      orgId: org.id,
-      orgName: org.name,
-      effectiveLimit,
-      remaining,
-      timestamp: now,
-    });
   });
 });

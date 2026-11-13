@@ -1,210 +1,128 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import fastify, { FastifyInstance } from 'fastify';
-import { dashboardPlugin } from '../src/plugins/dashboard';
+import { FastifyInstance } from 'fastify';
+import { buildApp } from '../src/app';
 
-describe('Web Dashboard & Live Visual Simulator', () => {
+// Integration tests: need PostgreSQL + Redis from docker-compose (run: docker compose up -d postgres redis).
+describe('Dashboard (real PostgreSQL + Redis)', () => {
   let app: FastifyInstance;
+  let alpha: any;
+  let beta: any;
+
+  const overview = async () => {
+    const res = await app.inject({ method: 'GET', url: '/api/dashboard/overview' });
+    expect(res.statusCode).toBe(200);
+    return JSON.parse(res.payload).data;
+  };
+  const org = (data: any, slug: string) => data.organizations.find((o: any) => o.slug === slug);
 
   beforeAll(async () => {
-    app = fastify();
-    await app.register(dashboardPlugin);
+    app = buildApp();
     await app.ready();
+    const data = await overview();
+    alpha = org(data, 'alpha');
+    beta = org(data, 'beta');
   });
 
   afterAll(async () => {
     await app.close();
   });
 
-  it('serves dashboard HTML at /', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/',
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toContain('text/html');
-    expect(res.payload).toContain('RatePulse');
+  it('serves the dashboard page', async () => {
+    for (const url of ['/', '/dashboard', '/public/dashboard/index.html']) {
+      const res = await app.inject({ method: 'GET', url });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers['content-type']).toContain('text/html');
+      expect(res.payload).toContain('RatePulse');
+    }
+    const res = await app.inject({ method: 'GET', url: '/dashboard' });
     expect(res.payload).toContain('Rate limit simulator');
-  });
-
-  it('serves dashboard HTML at /dashboard', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/dashboard',
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.headers['content-type']).toContain('text/html');
     expect(res.payload).toContain('Quota pools');
   });
 
-  it('serves static assets under /public/dashboard/index.html', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/public/dashboard/index.html',
-    });
-
-    expect(res.statusCode).toBe(200);
-    expect(res.payload).toContain('RatePulse');
+  it('returns real overview data with limits', async () => {
+    const data = await overview();
+    expect(data.system.status).toBe('healthy');
+    expect(data.degraded).toBe(false);
+    expect(data.limits).toEqual({ baseLimit: 5, windowMs: 10000 });
+    expect(alpha).toBeDefined();
+    expect(beta).toBeDefined();
+    expect(alpha.pool.total).toBe(10000);
+    expect(beta.pool.total).toBe(5000);
+    expect(alpha.effectiveLimit).toBe(5 + alpha.pool.activeLeaseSum);
   });
 
-  it('returns overview data from /api/dashboard/overview', async () => {
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/dashboard/overview',
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.payload);
-    expect(body.success).toBe(true);
-    expect(body.data).toBeDefined();
-    expect(body.data.system).toBeDefined();
-    expect(body.data.organizations).toHaveLength(2);
-    expect(body.data.organizations[0].slug).toBe('alpha');
-    expect(body.data.organizations[1].slug).toBe('beta');
-    expect(body.data.organizations[0].pool.total).toBe(10000);
-    expect(body.data.organizations[1].pool.total).toBe(5000);
-    expect(body.data.desync).toBeDefined();
-    expect(body.data.limits).toEqual({ baseLimit: 5, windowMs: 10000 });
-  });
-
-  it('creates peer-to-peer quota loans via POST /api/dashboard/loans', async () => {
-    const overviewRes = await app.inject({ method: 'GET', url: '/api/dashboard/overview' });
-    const { organizations } = JSON.parse(overviewRes.payload).data;
-    const alpha = organizations.find((o: any) => o.slug === 'alpha');
-    const beta = organizations.find((o: any) => o.slug === 'beta');
-
+  it('creates and repays a real loan', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/dashboard/loans',
-      payload: {
-        lenderOrgId: alpha.id,
-        borrowerOrgId: beta.id,
-        amount: 500,
-        ttlSeconds: 60,
-        note: 'Test Loan Transfer',
-      },
+      payload: { lenderOrgId: alpha.id, borrowerOrgId: beta.id, amount: 100, ttlSeconds: 60 },
     });
-
     expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.payload);
-    expect(body.success).toBe(true);
-    expect(body.data.amount).toBe(500);
+    const loan = JSON.parse(res.payload).data;
+    const data = await overview();
+    expect(data.loans.some((l: any) => l.id === loan.id && l.status === 'active')).toBe(true);
 
-    // Verify in overview that loan is reflected
-    const updatedOverview = await app.inject({ method: 'GET', url: '/api/dashboard/overview' });
-    const updatedLoans = JSON.parse(updatedOverview.payload).data.loans;
-    expect(updatedLoans.length).toBeGreaterThan(0);
+    const repay = await app.inject({ method: 'POST', url: `/api/dashboard/loans/${loan.id}/repay` });
+    expect(repay.statusCode).toBe(200);
   });
 
-  it('rejects invalid loan parameters (self loan)', async () => {
+  it('rejects a self loan with 400', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/dashboard/loans',
-      payload: {
-        lenderOrgId: 'same-org',
-        borrowerOrgId: 'same-org',
-        amount: 100,
-      },
+      payload: { lenderOrgId: alpha.id, borrowerOrgId: alpha.id, amount: 100 },
     });
-
     expect(res.statusCode).toBe(400);
-    const body = JSON.parse(res.payload);
-    expect(body.success).toBe(false);
+    expect(JSON.parse(res.payload).success).toBe(false);
   });
 
-  it('claims a quota lease via POST /api/dashboard/leases', async () => {
-    const overviewRes = await app.inject({ method: 'GET', url: '/api/dashboard/overview' });
-    const { organizations } = JSON.parse(overviewRes.payload).data;
-    const alpha = organizations.find((o: any) => o.slug === 'alpha');
+  it('rejects a loan larger than the pool with 422 instead of faking success', async () => {
+    const data = await overview();
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/dashboard/loans',
+      payload: { lenderOrgId: alpha.id, borrowerOrgId: beta.id, amount: org(data, 'alpha').pool.available + 1, ttlSeconds: 60 },
+    });
+    expect(res.statusCode).toBe(422);
+    expect(JSON.parse(res.payload).error.code).toBe('INSUFFICIENT_QUOTA');
+  });
 
+  it('a lease raises the limit applied by the real rate limiter', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/dashboard/leases',
-      payload: {
-        orgId: alpha.id,
-        amount: 50,
-        ttlSeconds: 30,
-      },
+      payload: { orgId: alpha.id, amount: 7, ttlSeconds: 30 },
     });
-
     expect(res.statusCode).toBe(201);
-    const body = JSON.parse(res.payload);
-    expect(body.success).toBe(true);
-    expect(body.data.amount).toBe(50);
+    const lease = JSON.parse(res.payload).data;
+
+    const a = org(await overview(), 'alpha');
+    const ping = await app.inject({ method: 'POST', url: '/api/ping', headers: { 'x-api-key': a.apiKey } });
+    expect([200, 429]).toContain(ping.statusCode);
+    expect(Number(ping.headers['x-ratelimit-limit'])).toBe(a.effectiveLimit);
+
+    const rel = await app.inject({ method: 'DELETE', url: `/api/dashboard/leases/${lease.id}` });
+    expect(rel.statusCode).toBe(200);
   });
 
-  it('simulates Redis cache desync and heals it via reconciliation', async () => {
-    // 1. Trigger desync
-    const desyncRes = await app.inject({
-      method: 'POST',
-      url: '/api/dashboard/chaos/desync',
-    });
-
-    expect(desyncRes.statusCode).toBe(200);
-    const desyncBody = JSON.parse(desyncRes.payload);
-    expect(desyncBody.success).toBe(true);
-
-    // Verify desync is detected in overview
-    const overviewAfterDesync = await app.inject({ method: 'GET', url: '/api/dashboard/overview' });
-    const desyncData = JSON.parse(overviewAfterDesync.payload).data.desync;
-    expect(desyncData.detected).toBe(true);
-
-    // 2. Trigger reconciliation
-    const healRes = await app.inject({
-      method: 'POST',
-      url: '/api/dashboard/chaos/reconcile',
-    });
-
-    expect(healRes.statusCode).toBe(200);
-    const healBody = JSON.parse(healRes.payload);
-    expect(healBody.success).toBe(true);
-
-    // Verify desync is cleared in overview
-    const overviewAfterHeal = await app.inject({ method: 'GET', url: '/api/dashboard/overview' });
-    const healedData = JSON.parse(overviewAfterHeal.payload).data.desync;
-    expect(healedData.detected).toBe(false);
+  it('returns 404 for an unknown lease instead of faking success', async () => {
+    const res = await app.inject({ method: 'DELETE', url: '/api/dashboard/leases/00000000-0000-0000-0000-000000000000' });
+    expect(res.statusCode).toBe(404);
   });
 
-  it('runs rate-limited simulator ping with rate limit enforcement', async () => {
-    const overviewRes = await app.inject({ method: 'GET', url: '/api/dashboard/overview' });
-    const { organizations } = JSON.parse(overviewRes.payload).data;
-    const beta = organizations.find((o: any) => o.slug === 'beta');
+  it('detects injected Redis drift and heals it with the shared reconciliation', async () => {
+    const desync = await app.inject({ method: 'POST', url: '/api/dashboard/chaos/desync' });
+    expect(desync.statusCode).toBe(200);
+    expect((await overview()).desync.detected).toBe(true);
 
-    // First request should succeed (200 OK)
-    const res1 = await app.inject({
-      method: 'POST',
-      url: '/api/dashboard/ping-proxy',
-      headers: {
-        'x-api-key': beta.apiKey,
-      },
-    });
+    const heal = await app.inject({ method: 'POST', url: '/api/dashboard/chaos/reconcile' });
+    expect(heal.statusCode).toBe(200);
+    expect(JSON.parse(heal.payload).correctedCount).toBeGreaterThanOrEqual(1);
+    expect((await overview()).desync.detected).toBe(false);
+  });
 
-    expect(res1.statusCode).toBe(200);
-    const body1 = JSON.parse(res1.payload);
-    expect(body1.message).toBe('pong');
-    expect(res1.headers['x-ratelimit-limit']).toBeDefined();
-
-    // Rapid requests should eventually hit rate limit (429)
-    let throttled = false;
-    for (let i = 0; i < 20; i++) {
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/dashboard/ping-proxy',
-        headers: {
-          'x-api-key': beta.apiKey,
-        },
-      });
-
-      if (res.statusCode === 429) {
-        throttled = true;
-        expect(res.headers['retry-after']).toBeDefined();
-        const body = JSON.parse(res.payload);
-        expect(body.error.code).toBe('RATE_LIMIT_EXCEEDED');
-        break;
-      }
-    }
-
-    expect(throttled).toBe(true);
+  it('no longer exposes the fake ping proxy', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/dashboard/ping-proxy' });
+    expect(res.statusCode).toBe(404);
   });
 });

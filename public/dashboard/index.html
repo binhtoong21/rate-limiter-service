@@ -330,6 +330,10 @@
           <svg class="i" viewBox="0 0 24 24" style="color:var(--warn)"><path d="M12 20h.01M8.5 16.4a5 5 0 0 1 7 0M2 8.8a15 15 0 0 1 20 0M5 12.9a10 10 0 0 1 14 0"/></svg>
           <div class="grow"><b>Can't reach the server</b><span class="muted">Showing the last known data. Retrying automatically…</span></div>
         </div>
+        <div class="alert-box" id="alert-degraded" hidden>
+          <svg class="i" viewBox="0 0 24 24" style="color:var(--bad)"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/></svg>
+          <div class="grow"><b>PostgreSQL or Redis is down</b><span class="muted">Pool data is unavailable and changes are refused. The rate limiter now follows each org's fail-open / fail-closed policy. Start the stores with <span class="mono">docker compose up -d</span>.</span></div>
+        </div>
         <div class="alert-box" id="alert-desync" hidden>
           <svg class="i" viewBox="0 0 24 24" style="color:var(--warn)"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/></svg>
           <div class="grow"><b>Redis has drifted from PostgreSQL</b><span class="muted" id="desync-text"></span></div>
@@ -719,10 +723,11 @@
       if (!sys) return;
       const pgUp = sys.postgres === 'up', rUp = sys.redis === 'up';
       const dot = $('health-dot'), txt = $('health-text');
-      if (!pgUp || !rUp) { dot.className = 'dot bad'; txt.textContent = 'Degraded · demo mode'; }
+      if (!pgUp || !rUp) { dot.className = 'dot bad'; txt.textContent = 'Degraded'; }
       else if (desync?.detected) { dot.className = 'dot warn'; txt.textContent = 'Drift detected'; }
       else { dot.className = 'dot'; txt.textContent = 'All systems operational'; }
       $('alert-desync').hidden = !desync?.detected;
+      $('alert-degraded').hidden = pgUp && rUp;
       if (desync?.detected) $('desync-text').textContent = ' ' + (desync.details || 'Available quota in Redis does not match the event log.');
 
       $('node-pg').className = 'node' + (pgUp ? '' : ' bad');
@@ -958,7 +963,6 @@
       try {
         const opts = { method: 'POST', headers: { 'X-API-Key': key } };
         let res = await fetch('/api/ping', opts);
-        if (res.status === 500 || res.status === 404) res = await fetch('/api/dashboard/ping-proxy', opts);
         const lat = performance.now() - t0;
         const lim = parseInt(res.headers.get('X-RateLimit-Limit'), 10);
         const rem = parseInt(res.headers.get('X-RateLimit-Remaining'), 10);
