@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { redis } from '../redis';
 import { rateLimitRequestsTotal, rateLimitCheckDuration } from './metrics';
+import { redisOutageActive } from '../chaos/redis-outage';
 
 let slidingWindowScriptSha: string;
 
@@ -30,6 +31,10 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
     const timer = rateLimitCheckDuration.startTimer({ algorithm });
 
     try {
+      if (redisOutageActive()) {
+        // Dev-only drill: take the same fallback path as a real Redis failure
+        throw new Error('Simulated Redis outage (chaos drill)');
+      }
       let allowed = false;
       let estimatedCount = 0;
 
@@ -96,8 +101,11 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
           reply.header('Retry-After', Math.ceil((currentWindowStart + windowSizeMs - now) / 1000));
         }
         return reply.status(429).send({
-          error: 'Too Many Requests',
-          message: 'Rate limit exceeded',
+          success: false,
+          error: {
+            code: 'RATE_LIMIT_EXCEEDED',
+            message: 'Rate limit exceeded',
+          }
         });
       }
     } catch (err) {
@@ -113,15 +121,21 @@ export const rateLimitPlugin = fp(async (fastify, opts) => {
         reply.header('X-Limiter-Fallback', 'fail-closed');
         reply.header('Retry-After', 30);
         return reply.status(429).send({
-          error: 'Too Many Requests',
-          message: 'Rate limiter degraded and organization is fail-closed',
+          success: false,
+          error: {
+            code: 'RATE_LIMITER_DEGRADED',
+            message: 'Rate limiter degraded and organization is fail-closed',
+          }
         });
       } else {
         reply.header('X-Limiter-Fallback', 'fail-closed');
         reply.header('Retry-After', 30);
         return reply.status(503).send({
-          error: 'Service Unavailable',
-          message: 'Rate limiter degraded and org config is unknown',
+          success: false,
+          error: {
+            code: 'REDIS_UNAVAILABLE',
+            message: 'Rate limiter degraded and org config is unknown',
+          }
         });
       }
     }

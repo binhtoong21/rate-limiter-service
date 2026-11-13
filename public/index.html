@@ -1,0 +1,1464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RatePulse &mdash; Quota Trading &amp; Adaptive Rate Limiter</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Canvas Confetti -->
+  <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+
+  <style>
+    /* Clean, subtle scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col font-sans antialiased selection:bg-slate-200 selection:text-slate-900">
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2 max-w-md pointer-events-none"></div>
+
+  <!-- Header -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-40">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
+      <!-- Brand & Title -->
+      <div class="flex items-center gap-3">
+        <div class="h-9 w-9 rounded-lg bg-slate-900 flex items-center justify-center shadow-sm">
+          <i data-lucide="activity" class="w-4 h-4 text-white"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-bold text-base tracking-tight text-slate-900">RatePulse</span>
+            <span class="text-[11px] px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 font-mono font-medium">v1.0</span>
+          </div>
+          <p class="text-xs text-slate-500">Distributed Quota Trading &amp; Adaptive Rate Limiter</p>
+        </div>
+      </div>
+
+      <!-- System Health Status & Controls -->
+      <div class="flex flex-wrap items-center gap-2 sm:gap-2.5 text-xs">
+        <!-- Status Badges -->
+        <div id="status-system" class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium">
+          <span class="w-2 h-2 rounded-full bg-emerald-600 animate-pulse"></span>
+          <span id="system-status-text">Healthy</span>
+        </div>
+
+        <div id="status-pg" class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-700 shadow-sm">
+          <i data-lucide="database" class="w-3.5 h-3.5 text-slate-500"></i>
+          <span class="text-slate-500">PG:</span>
+          <span id="pg-status-text" class="font-semibold text-emerald-700">up</span>
+        </div>
+
+        <div id="status-redis" class="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-700 shadow-sm">
+          <i data-lucide="layers" class="w-3.5 h-3.5 text-slate-500"></i>
+          <span class="text-slate-500">Redis:</span>
+          <span id="redis-status-text" class="font-semibold text-emerald-700">up</span>
+        </div>
+
+        <div class="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-600 shadow-sm font-mono text-[11px]">
+          <i data-lucide="cpu" class="w-3.5 h-3.5 text-slate-400"></i>
+          <span id="node-env-text">development</span>
+        </div>
+
+        <!-- Auto-Refresh Toggle -->
+        <div class="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 rounded-md shadow-sm">
+          <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" id="auto-refresh-toggle" class="sr-only peer" checked>
+            <div class="w-7 h-4 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-slate-900"></div>
+            <span class="ml-2 text-slate-700 select-none text-[11px]">Auto (2s)</span>
+          </label>
+        </div>
+
+        <!-- Manual Refresh Button -->
+        <button id="manual-refresh-btn" class="p-1.5 rounded-md bg-white hover:bg-slate-50 border border-slate-200 text-slate-600 shadow-sm transition-colors" title="Refresh Now">
+          <i data-lucide="refresh-cw" class="w-3.5 h-3.5" id="refresh-icon"></i>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Chaos / Desync Alert Banner (Dynamic) -->
+  <div id="desync-banner" class="hidden bg-amber-50 border-b border-amber-200 px-4 py-2.5">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm">
+      <div class="flex items-center gap-2.5 text-amber-900">
+        <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-600 flex-shrink-0"></i>
+        <div>
+          <strong class="font-semibold text-amber-900">Redis State Divergence Detected:</strong>
+          <span id="desync-details-text" class="text-amber-800 ml-1">Materialized view quota counter does not match PostgreSQL Ground Truth.</span>
+        </div>
+      </div>
+      <button id="reconcile-quick-btn" class="px-3 py-1 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-medium transition-colors shadow-sm flex items-center gap-1.5 text-xs">
+        <i data-lucide="shield-check" class="w-3.5 h-3.5"></i>
+        <span>Trigger Self-Healing Reconciliation</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Reconciled Success Banner (Dynamic) -->
+  <div id="healed-banner" class="hidden bg-emerald-50 border-b border-emerald-200 px-4 py-2.5">
+    <div class="max-w-7xl mx-auto flex items-center justify-between text-xs sm:text-sm text-emerald-900">
+      <div class="flex items-center gap-2.5">
+        <i data-lucide="check-circle" class="w-4 h-4 text-emerald-600 flex-shrink-0"></i>
+        <span><strong class="font-semibold text-emerald-950">Reconciliation Healed:</strong> Redis Materialized View synchronized with PostgreSQL Ground Truth.</span>
+      </div>
+      <button onclick="document.getElementById('healed-banner').classList.add('hidden')" class="text-emerald-700 hover:text-emerald-950">
+        <i data-lucide="x" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6 space-y-6">
+
+    <!-- TOPOLOGY SECTION: Quota Pools for Alpha & Beta -->
+    <section>
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+            <i data-lucide="pie-chart" class="w-4 h-4 text-slate-700"></i>
+            <span>Quota Pools Topology</span>
+          </h2>
+          <p class="text-xs text-slate-500">PostgreSQL is Ground Truth &bull; Redis is Materialized View</p>
+        </div>
+        <div class="text-xs text-slate-500 font-mono">
+          Last Synced: <span id="last-sync-time" class="text-slate-700">--:--:--</span>
+        </div>
+      </div>
+
+      <!-- Org Cards Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5" id="org-cards-container">
+        <!-- Organization Alpha Card -->
+        <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-800 font-bold text-sm">
+                &alpha;
+              </div>
+              <div>
+                <div class="flex items-center gap-2">
+                  <h3 class="font-bold text-slate-900 text-sm">Organization Alpha</h3>
+                  <span class="text-[10px] px-2 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium">Fail-Open</span>
+                </div>
+                <div class="flex items-center gap-2 mt-0.5 text-xs text-slate-500 font-mono">
+                  <span>API Key:</span>
+                  <span id="alpha-key-display" class="text-slate-700">pk_test_alpha...</span>
+                  <button onclick="copyToClipboard('alpha')" class="text-slate-400 hover:text-slate-700 transition" title="Copy Key">
+                    <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <button onclick="useKeyInSimulator('alpha')" class="text-blue-600 hover:text-blue-800 font-sans text-[11px] underline ml-1">
+                    Use in Sim
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Quick Claim Lease Button -->
+            <button onclick="quickClaimLease('alpha', 10, 60)" class="px-2.5 py-1.5 rounded-md bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-medium transition shadow-sm flex items-center gap-1.5">
+              <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-500"></i>
+              <span>+10 Lease (60s)</span>
+            </button>
+          </div>
+
+          <!-- Multi-Segment Allocation Bar -->
+          <div class="mb-4">
+            <div class="flex justify-between text-xs text-slate-500 mb-1.5">
+              <span>Pool Allocation</span>
+              <span id="alpha-utilization-text" class="font-medium text-slate-700">0% Committed</span>
+            </div>
+            <div class="w-full h-3 bg-slate-100 rounded-full overflow-hidden flex border border-slate-200">
+              <div id="alpha-bar-available" class="bg-emerald-500 h-full rounded-l transition-all duration-500" style="width: 100%;" title="Available"></div>
+              <div id="alpha-bar-reserved" class="bg-amber-400 h-full transition-all duration-500" style="width: 0%;" title="Reserved for Leases"></div>
+              <div id="alpha-bar-loaned" class="bg-indigo-400 h-full transition-all duration-500" style="width: 0%;" title="Loaned Out"></div>
+              <div id="alpha-bar-received" class="bg-sky-400 h-full rounded-r transition-all duration-500" style="width: 0%;" title="Received from Loans"></div>
+            </div>
+            <!-- Legend -->
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-slate-500">
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Available</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-400"></span>Reserved (Leases)</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-indigo-400"></span>Loaned Out</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-sky-400"></span>Received Loans</span>
+            </div>
+          </div>
+
+          <!-- 4 Stats Grid -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-3 border-t border-slate-100">
+            <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+              <span class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block">Total</span>
+              <span id="alpha-stat-total" class="text-sm font-bold text-slate-900 font-mono">10,000</span>
+            </div>
+            <div class="p-2.5 rounded-lg bg-emerald-50/70 border border-emerald-200">
+              <span class="text-[10px] uppercase tracking-wider text-emerald-800 font-semibold block">Available</span>
+              <span id="alpha-stat-available" class="text-sm font-bold text-emerald-900 font-mono">10,000</span>
+            </div>
+            <div class="p-2.5 rounded-lg bg-amber-50/70 border border-amber-200">
+              <span class="text-[10px] uppercase tracking-wider text-amber-800 font-semibold block">Reserved</span>
+              <span id="alpha-stat-reserved" class="text-sm font-bold text-amber-900 font-mono">0</span>
+            </div>
+            <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+              <span class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block">Net Loans</span>
+              <span id="alpha-stat-loans" class="text-sm font-bold text-slate-800 font-mono">0</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Organization Beta Card -->
+        <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+          <div class="flex items-center justify-between mb-4">
+            <div class="flex items-center gap-3">
+              <div class="w-9 h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-800 font-bold text-sm">
+                &beta;
+              </div>
+              <div>
+                <div class="flex items-center gap-2">
+                  <h3 class="font-bold text-slate-900 text-sm">Organization Beta</h3>
+                  <span class="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 font-medium">Fail-Closed</span>
+                </div>
+                <div class="flex items-center gap-2 mt-0.5 text-xs text-slate-500 font-mono">
+                  <span>API Key:</span>
+                  <span id="beta-key-display" class="text-slate-700">pk_test_beta...</span>
+                  <button onclick="copyToClipboard('beta')" class="text-slate-400 hover:text-slate-700 transition" title="Copy Key">
+                    <i data-lucide="copy" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <button onclick="useKeyInSimulator('beta')" class="text-blue-600 hover:text-blue-800 font-sans text-[11px] underline ml-1">
+                    Use in Sim
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Quick Claim Lease Button -->
+            <button onclick="quickClaimLease('beta', 10, 60)" class="px-2.5 py-1.5 rounded-md bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-medium transition shadow-sm flex items-center gap-1.5">
+              <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-500"></i>
+              <span>+10 Lease (60s)</span>
+            </button>
+          </div>
+
+          <!-- Multi-Segment Allocation Bar -->
+          <div class="mb-4">
+            <div class="flex justify-between text-xs text-slate-500 mb-1.5">
+              <span>Pool Allocation</span>
+              <span id="beta-utilization-text" class="font-medium text-slate-700">0% Committed</span>
+            </div>
+            <div class="w-full h-3 bg-slate-100 rounded-full overflow-hidden flex border border-slate-200">
+              <div id="beta-bar-available" class="bg-emerald-500 h-full rounded-l transition-all duration-500" style="width: 100%;" title="Available"></div>
+              <div id="beta-bar-reserved" class="bg-amber-400 h-full transition-all duration-500" style="width: 0%;" title="Reserved for Leases"></div>
+              <div id="beta-bar-loaned" class="bg-indigo-400 h-full transition-all duration-500" style="width: 0%;" title="Loaned Out"></div>
+              <div id="beta-bar-received" class="bg-sky-400 h-full rounded-r transition-all duration-500" style="width: 0%;" title="Received from Loans"></div>
+            </div>
+            <!-- Legend -->
+            <div class="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-slate-500">
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500"></span>Available</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-400"></span>Reserved (Leases)</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-indigo-400"></span>Loaned Out</span>
+              <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-sky-400"></span>Received Loans</span>
+            </div>
+          </div>
+
+          <!-- 4 Stats Grid -->
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center pt-3 border-t border-slate-100">
+            <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+              <span class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block">Total</span>
+              <span id="beta-stat-total" class="text-sm font-bold text-slate-900 font-mono">5,000</span>
+            </div>
+            <div class="p-2.5 rounded-lg bg-emerald-50/70 border border-emerald-200">
+              <span class="text-[10px] uppercase tracking-wider text-emerald-800 font-semibold block">Available</span>
+              <span id="beta-stat-available" class="text-sm font-bold text-emerald-900 font-mono">5,000</span>
+            </div>
+            <div class="p-2.5 rounded-lg bg-amber-50/70 border border-amber-200">
+              <span class="text-[10px] uppercase tracking-wider text-amber-800 font-semibold block">Reserved</span>
+              <span id="beta-stat-reserved" class="text-sm font-bold text-amber-900 font-mono">0</span>
+            </div>
+            <div class="p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+              <span class="text-[10px] uppercase tracking-wider text-slate-500 font-semibold block">Net Loans</span>
+              <span id="beta-stat-loans" class="text-sm font-bold text-slate-800 font-mono">0</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TWO COLUMN ROW: Quota Trading Hub (Left) & Real-Time Burst Simulator (Right) -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- LEFT: Interactive Quota Trading (Loans) (Col 6) -->
+      <section class="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+            <div>
+              <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <i data-lucide="arrow-left-right" class="w-4 h-4 text-slate-700"></i>
+                <span>Peer-to-Peer Quota Trading</span>
+              </h2>
+              <p class="text-xs text-slate-500">Create time-bounded quota loans between organizations</p>
+            </div>
+            <span class="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-mono">ACID Guaranteed</span>
+          </div>
+
+          <!-- Trading Form -->
+          <form id="loan-form" onsubmit="handleCreateLoan(event)" class="space-y-4">
+            <!-- Lender & Borrower Selectors -->
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Lender Org</label>
+                <select id="loan-lender-select" onchange="syncBorrowerSelect()" class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900">
+                  <option value="alpha">Organization Alpha</option>
+                  <option value="beta">Organization Beta</option>
+                </select>
+              </div>
+              <div>
+                <label class="block text-xs font-semibold text-slate-700 mb-1">Borrower Org</label>
+                <select id="loan-borrower-select" class="w-full bg-slate-100 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-600 focus:outline-none" disabled>
+                  <option value="beta">Organization Beta</option>
+                  <option value="alpha">Organization Alpha</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Amount Slider -->
+            <div>
+              <div class="flex justify-between items-center text-xs mb-1">
+                <label class="font-semibold text-slate-700">Loan Amount (Quota Units)</label>
+                <span id="loan-amount-badge" class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 font-mono font-bold text-xs border border-slate-200">500 units</span>
+              </div>
+              <input type="range" id="loan-amount-slider" min="50" max="3000" step="50" value="500" oninput="updateLoanSliderLabels()" class="w-full accent-slate-900 cursor-pointer">
+              <!-- Quick presets -->
+              <div class="flex gap-2 mt-1.5">
+                <button type="button" onclick="setLoanAmount(100)" class="px-2.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] text-slate-700 font-medium transition">+100</button>
+                <button type="button" onclick="setLoanAmount(500)" class="px-2.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] text-slate-700 font-medium transition">500</button>
+                <button type="button" onclick="setLoanAmount(1000)" class="px-2.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] text-slate-700 font-medium transition">1,000</button>
+                <button type="button" onclick="setLoanAmount(2000)" class="px-2.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] text-slate-700 font-medium transition">2,000</button>
+              </div>
+            </div>
+
+            <!-- TTL Slider -->
+            <div>
+              <div class="flex justify-between items-center text-xs mb-1">
+                <label class="font-semibold text-slate-700">Loan Duration (TTL)</label>
+                <span id="loan-ttl-badge" class="px-2 py-0.5 rounded bg-slate-100 text-slate-800 font-mono font-bold text-xs border border-slate-200">60 seconds</span>
+              </div>
+              <input type="range" id="loan-ttl-slider" min="10" max="3600" step="10" value="60" oninput="updateLoanSliderLabels()" class="w-full accent-slate-900 cursor-pointer">
+              <div class="flex gap-2 mt-1.5">
+                <button type="button" onclick="setLoanTTL(30)" class="px-2.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] text-slate-700 font-medium transition">30s</button>
+                <button type="button" onclick="setLoanTTL(60)" class="px-2.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] text-slate-700 font-medium transition">60s</button>
+                <button type="button" onclick="setLoanTTL(300)" class="px-2.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] text-slate-700 font-medium transition">5m</button>
+                <button type="button" onclick="setLoanTTL(3600)" class="px-2.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-[11px] text-slate-700 font-medium transition">1h</button>
+              </div>
+            </div>
+
+            <!-- Submit Button -->
+            <button type="submit" id="create-loan-btn" class="w-full py-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition shadow-sm flex items-center justify-center gap-2">
+              <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-400"></i>
+              <span>Transfer / Create Loan</span>
+            </button>
+          </form>
+        </div>
+
+        <!-- Active Loans Mini-Table -->
+        <div class="mt-6 pt-4 border-t border-slate-100">
+          <div class="flex items-center justify-between mb-2">
+            <h4 class="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+              <i data-lucide="clock" class="w-3.5 h-3.5 text-slate-500"></i>
+              <span>Active Quota Loans</span>
+            </h4>
+            <span id="active-loans-count" class="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">0 active</span>
+          </div>
+
+          <div class="overflow-x-auto max-h-44 overflow-y-auto border border-slate-200 rounded-lg">
+            <table class="w-full text-left text-[11px]">
+              <thead class="text-slate-600 bg-slate-50 sticky top-0 border-b border-slate-200">
+                <tr>
+                  <th class="py-1.5 px-3">Route</th>
+                  <th class="py-1.5 px-3">Amount</th>
+                  <th class="py-1.5 px-3">Expires In</th>
+                  <th class="py-1.5 px-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="loans-table-body" class="divide-y divide-slate-100 font-mono bg-white">
+                <tr>
+                  <td colspan="4" class="text-center py-4 text-slate-400 font-sans">No active loans. Create one above!</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- RIGHT: Real-Time Rate Limit Burst Simulator (Col 6) -->
+      <section class="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+            <div>
+              <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <i data-lucide="gauge" class="w-4 h-4 text-slate-700"></i>
+                <span>Live Rate Limit Burst Simulator</span>
+              </h2>
+              <p class="text-xs text-slate-500">Target: <code class="text-slate-800 font-mono bg-slate-100 px-1 py-0.5 rounded">POST /api/ping</code> &bull; Base: 5 req / 10s</p>
+            </div>
+            <!-- Effective Limit Badge -->
+            <div class="text-right">
+              <span class="text-[10px] text-slate-500 block">Effective Rate Limit</span>
+              <span id="sim-effective-limit-badge" class="text-sm font-bold text-slate-900 font-mono">5 req / 10s</span>
+            </div>
+          </div>
+
+          <!-- Simulator Config Controls -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <!-- Org Selector -->
+            <div>
+              <label class="block text-xs font-semibold text-slate-700 mb-1">Target Org</label>
+              <select id="sim-org-select" onchange="handleSimOrgChange()" class="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900">
+                <option value="alpha">Alpha (Fail-Open)</option>
+                <option value="beta">Beta (Fail-Closed)</option>
+              </select>
+            </div>
+
+            <!-- API Key Input -->
+            <div class="sm:col-span-2">
+              <label class="block text-xs font-semibold text-slate-700 mb-1">API Key (<code class="text-slate-500 font-mono">X-API-Key</code>)</label>
+              <input type="text" id="sim-api-key-input" class="w-full bg-white border border-slate-300 rounded-lg px-2.5 py-2 text-xs text-slate-800 font-mono focus:outline-none focus:ring-2 focus:ring-slate-900">
+            </div>
+          </div>
+
+          <!-- Action Buttons & RPS Stream -->
+          <div class="space-y-3 mb-4">
+            <!-- Buttons -->
+            <div class="flex flex-wrap items-center gap-2">
+              <button id="fire-burst-btn" onclick="fireBurst(20)" class="flex-1 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition shadow-sm flex items-center justify-center gap-1.5">
+                <i data-lucide="flame" class="w-3.5 h-3.5 text-amber-400"></i>
+                <span>Fire Burst (20 reqs)</span>
+              </button>
+
+              <button onclick="fireSingleRequest()" class="px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-medium text-xs transition shadow-sm flex items-center gap-1.5">
+                <i data-lucide="send" class="w-3.5 h-3.5 text-slate-500"></i>
+                <span>Single Req</span>
+              </button>
+
+              <button id="stream-toggle-btn" onclick="toggleContinuousStream()" class="px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-medium text-xs transition shadow-sm flex items-center gap-1.5">
+                <i data-lucide="play" class="w-3.5 h-3.5 text-slate-700" id="stream-btn-icon"></i>
+                <span id="stream-btn-text">Start Stream</span>
+              </button>
+            </div>
+
+            <!-- RPS Slider -->
+            <div class="flex items-center gap-3 bg-slate-50 border border-slate-200 px-3 py-2 rounded-lg">
+              <span class="text-xs text-slate-500 whitespace-nowrap">RPS:</span>
+              <input type="range" id="rps-slider" min="1" max="50" value="10" oninput="document.getElementById('rps-display').innerText = this.value + ' req/s'" class="flex-1 accent-slate-900 cursor-pointer">
+              <span id="rps-display" class="text-xs font-mono font-bold text-slate-900 w-16 text-right">10 req/s</span>
+            </div>
+          </div>
+
+          <!-- Live Metrics Counters -->
+          <div class="grid grid-cols-4 gap-2 text-center mb-3">
+            <div class="p-2 rounded-lg bg-slate-50 border border-slate-200">
+              <span class="text-[10px] text-slate-500 font-semibold uppercase block">Sent</span>
+              <span id="sim-sent-count" class="text-sm font-bold text-slate-900 font-mono">0</span>
+            </div>
+            <div class="p-2 rounded-lg bg-emerald-50 border border-emerald-200">
+              <span class="text-[10px] text-emerald-800 font-semibold uppercase block">200 OK</span>
+              <span id="sim-ok-count" class="text-sm font-bold text-emerald-900 font-mono">0</span>
+            </div>
+            <div class="p-2 rounded-lg bg-rose-50 border border-rose-200">
+              <span class="text-[10px] text-rose-800 font-semibold uppercase block">429 Limit</span>
+              <span id="sim-throttled-count" class="text-sm font-bold text-rose-900 font-mono">0</span>
+            </div>
+            <div class="p-2 rounded-lg bg-slate-50 border border-slate-200">
+              <span class="text-[10px] text-slate-600 font-semibold uppercase block">Pass Rate</span>
+              <span id="sim-pass-rate" class="text-sm font-bold text-slate-900 font-mono">100%</span>
+            </div>
+          </div>
+
+          <!-- Retry-After Countdown Alert (Dynamic) -->
+          <div id="retry-after-alert" class="hidden mb-3 p-2.5 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-between text-xs">
+            <div class="flex items-center gap-2 text-rose-800">
+              <i data-lucide="timer" class="w-4 h-4 text-rose-600 animate-spin"></i>
+              <span>Throttled by Rate Limiter! Cooling down...</span>
+            </div>
+            <div class="font-mono font-bold text-rose-900 bg-white border border-rose-200 px-2 py-0.5 rounded">
+              Reset in: <span id="retry-after-seconds">0</span>s
+            </div>
+          </div>
+        </div>
+
+        <!-- Live Response Stream Waterfall -->
+        <div>
+          <div class="flex items-center justify-between text-[11px] text-slate-500 mb-1.5">
+            <span>Live Response Stream Waterfall</span>
+            <button onclick="clearResponseWaterfall()" class="text-slate-400 hover:text-slate-700">Clear</button>
+          </div>
+          <div id="response-waterfall" class="h-28 bg-slate-50 border border-slate-200 rounded-lg p-2.5 overflow-y-auto flex flex-wrap content-start gap-1 font-mono text-[10px]">
+            <span class="text-slate-400 italic font-sans p-1">Responses will stream here in real-time...</span>
+          </div>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ROW 3: Leases Inspector, Chaos & Self-Healing Deck, Live Audit Events Stream -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+      <!-- LEFT: Live Leases Inspector (Col 6) -->
+      <section class="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+        <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+          <div>
+            <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <i data-lucide="key" class="w-4 h-4 text-slate-700"></i>
+              <span>Live Leases Inspector</span>
+            </h2>
+            <p class="text-xs text-slate-500">Leases dynamically boost the effective rate limit ceiling</p>
+          </div>
+          <!-- Claim Lease Button -->
+          <button onclick="openClaimLeaseModal()" class="px-2.5 py-1.5 rounded-md bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 text-xs font-medium transition shadow-sm flex items-center gap-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5 text-slate-500"></i>
+            <span>Claim Lease</span>
+          </button>
+        </div>
+
+        <!-- Leases Table -->
+        <div class="overflow-x-auto max-h-64 overflow-y-auto border border-slate-200 rounded-lg">
+          <table class="w-full text-left text-xs">
+            <thead class="text-slate-600 bg-slate-50 sticky top-0 text-[11px] border-b border-slate-200">
+              <tr>
+                <th class="py-2 px-3">Organization</th>
+                <th class="py-2 px-3">Leased Amount</th>
+                <th class="py-2 px-3">Expires In</th>
+                <th class="py-2 px-3">Status</th>
+                <th class="py-2 px-3 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="leases-table-body" class="divide-y divide-slate-100 font-mono text-xs bg-white">
+              <tr>
+                <td colspan="5" class="text-center py-6 text-slate-400 font-sans">No active leases. Click "Claim Lease" to expand rate limit!</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- RIGHT: Chaos & Self-Healing Testing Panel (Col 6) -->
+      <section class="lg:col-span-6 bg-white border border-slate-200 rounded-xl p-5 shadow-sm flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
+            <div>
+              <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <i data-lucide="shield" class="w-4 h-4 text-slate-700"></i>
+                <span>Chaos &amp; Self-Healing Control Deck</span>
+              </h2>
+              <p class="text-xs text-slate-500">Simulate Redis cache corruption and observe automatic reconciliation</p>
+            </div>
+            <span class="text-[10px] px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-mono">Resilience Matrix</span>
+          </div>
+
+          <!-- Explanation Card -->
+          <div class="p-3 rounded-lg bg-slate-50 border border-slate-200 mb-4 text-xs text-slate-600 space-y-1">
+            <div class="flex items-center gap-1.5 font-semibold text-slate-900">
+              <i data-lucide="git-merge" class="w-3.5 h-3.5 text-slate-700"></i>
+              <span>Dual-Write &amp; Event-Driven Architecture</span>
+            </div>
+            <p class="text-slate-600 leading-relaxed">
+              PostgreSQL stores the immutable audit ledger (<code class="text-slate-800 font-mono bg-white px-1 py-0.5 border border-slate-200 rounded">quota_events</code>) as the absolute Ground Truth. Redis serves as a Materialized View for sub-millisecond evaluation.
+            </p>
+          </div>
+
+          <!-- Chaos Action Buttons -->
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            <!-- Trigger Desync -->
+            <button onclick="triggerSimulatedDesync()" class="p-3 rounded-lg bg-white hover:bg-rose-50/50 border border-slate-200 hover:border-rose-300 text-left transition shadow-sm group">
+              <div class="flex items-center justify-between mb-1">
+                <span class="font-bold text-xs text-rose-700 flex items-center gap-1.5">
+                  <i data-lucide="zap-off" class="w-3.5 h-3.5 text-rose-600"></i>
+                  <span>Simulate Redis Desync</span>
+                </span>
+                <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition"></i>
+              </div>
+              <p class="text-[11px] text-slate-500">Tamper with Redis quota counter without recording a PostgreSQL event.</p>
+            </button>
+
+            <!-- Trigger Reconciliation -->
+            <button onclick="triggerReconciliation()" class="p-3 rounded-lg bg-white hover:bg-emerald-50/50 border border-slate-200 hover:border-emerald-300 text-left transition shadow-sm group">
+              <div class="flex items-center justify-between mb-1">
+                <span class="font-bold text-xs text-emerald-800 flex items-center gap-1.5">
+                  <i data-lucide="shield-check" class="w-3.5 h-3.5 text-emerald-600"></i>
+                  <span>Trigger Reconciliation</span>
+                </span>
+                <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition"></i>
+              </div>
+              <p class="text-[11px] text-slate-500">Replays all PG audit events, detects drift, and restores Redis state.</p>
+            </button>
+          </div>
+        </div>
+
+        <!-- Drift Status Indicator -->
+        <div id="drift-status-box" class="p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between text-xs">
+          <div class="flex items-center gap-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-500" id="drift-indicator-dot"></span>
+            <span class="text-slate-700 font-medium" id="drift-status-label">No state divergence detected. System in sync.</span>
+          </div>
+          <span class="text-[11px] font-mono text-slate-500">Cron: 60s</span>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- ROW 4: Live Audit Events Stream (Full Width) -->
+    <section class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
+      <div class="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-slate-100">
+        <div>
+          <h2 class="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+            <i data-lucide="scroll-text" class="w-4 h-4 text-slate-700"></i>
+            <span>Live Audit Events Stream</span>
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+          </h2>
+          <p class="text-xs text-slate-500">Immutable ledger of quota mutations (<code class="text-slate-800 font-mono bg-slate-100 px-1 py-0.5 rounded">quota_events</code> table)</p>
+        </div>
+
+        <!-- Filter Pills -->
+        <div class="flex items-center gap-1.5 text-xs">
+          <button onclick="filterEvents('ALL')" class="event-filter-btn px-2.5 py-1 rounded-md bg-slate-900 text-white font-medium" data-filter="ALL">All</button>
+          <button onclick="filterEvents('LEASE')" class="event-filter-btn px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-600 hover:text-slate-900" data-filter="LEASE">Leases</button>
+          <button onclick="filterEvents('LOAN')" class="event-filter-btn px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-600 hover:text-slate-900" data-filter="LOAN">Loans</button>
+          <button onclick="filterEvents('RECONCILIATION')" class="event-filter-btn px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-600 hover:text-slate-900" data-filter="RECONCILIATION">Self-Healing</button>
+        </div>
+      </div>
+
+      <!-- Events Table -->
+      <div class="overflow-x-auto max-h-72 overflow-y-auto border border-slate-200 rounded-lg">
+        <table class="w-full text-left text-xs">
+          <thead class="text-slate-600 bg-slate-50 sticky top-0 text-[11px] border-b border-slate-200">
+            <tr>
+              <th class="py-2 px-3">Timestamp</th>
+              <th class="py-2 px-3">Event Type</th>
+              <th class="py-2 px-3">Organization</th>
+              <th class="py-2 px-3">Amount</th>
+              <th class="py-2 px-3">Balance After</th>
+              <th class="py-2 px-3 font-mono">Idempotency Key / Metadata</th>
+            </tr>
+          </thead>
+          <tbody id="events-table-body" class="divide-y divide-slate-100 font-mono text-xs bg-white">
+            <tr>
+              <td colspan="6" class="text-center py-6 text-slate-400 font-sans">Listening for quota events...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal for Claiming Lease -->
+  <div id="claim-lease-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+    <div class="bg-white border border-slate-200 rounded-xl max-w-md w-full p-5 shadow-xl">
+      <div class="flex items-center justify-between mb-4 pb-2 border-b border-slate-100">
+        <h3 class="font-bold text-slate-900 text-sm flex items-center gap-2">
+          <i data-lucide="key" class="w-4 h-4 text-slate-700"></i>
+          <span>Claim Quota Lease</span>
+        </h3>
+        <button onclick="closeClaimLeaseModal()" class="text-slate-400 hover:text-slate-700">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form onsubmit="handleClaimLeaseSubmit(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Target Organization</label>
+          <select id="modal-lease-org" class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900">
+            <option value="alpha">Organization Alpha</option>
+            <option value="beta">Organization Beta</option>
+          </select>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">Quota Amount to Reserve</label>
+          <input type="number" id="modal-lease-amount" value="50" min="1" max="1000" class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-slate-900">
+          <span class="text-[11px] text-slate-500 mt-1 block">Increases effective rate limit for the duration of the lease.</span>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 mb-1">TTL (Seconds)</label>
+          <input type="number" id="modal-lease-ttl" value="60" min="10" max="600" class="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 font-mono focus:outline-none focus:ring-2 focus:ring-slate-900">
+        </div>
+
+        <div class="flex justify-end gap-2 pt-2">
+          <button type="button" onclick="closeClaimLeaseModal()" class="px-3.5 py-2 rounded-lg bg-white border border-slate-300 text-slate-700 text-xs font-medium hover:bg-slate-50 transition">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium shadow-sm transition">Claim Lease</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- JAVASCRIPT APP LOGIC -->
+  <script>
+    // App State
+    const state = {
+      overview: null,
+      autoRefresh: true,
+      refreshInterval: null,
+      isStreaming: false,
+      streamInterval: null,
+      eventFilter: 'ALL',
+      cachedRawEvents: [],
+      simulator: {
+        sent: 0,
+        ok: 0,
+        throttled: 0,
+        retryTimer: null,
+      }
+    };
+
+    // Initialize Lucide Icons
+    function refreshIcons() {
+      if (window.lucide) {
+        lucide.createIcons();
+      }
+    }
+
+    // Toast Notification System
+    function showToast(message, type = 'info', title = '') {
+      const container = document.getElementById('toast-container');
+      if (!container) return;
+
+      const toast = document.createElement('div');
+      toast.className = `p-3.5 rounded-lg border shadow-md flex items-start gap-2.5 text-xs transition-all duration-300 pointer-events-auto transform translate-y-2 opacity-0 max-w-sm ${
+        type === 'success' ? 'bg-white border-slate-200 border-l-4 border-l-emerald-500 text-slate-800' :
+        type === 'error' ? 'bg-white border-slate-200 border-l-4 border-l-rose-500 text-slate-800' :
+        type === 'warning' ? 'bg-white border-slate-200 border-l-4 border-l-amber-500 text-slate-800' :
+        'bg-white border-slate-200 border-l-4 border-l-blue-500 text-slate-800'
+      }`;
+
+      const iconColor = type === 'success' ? 'text-emerald-600' :
+        type === 'error' ? 'text-rose-600' :
+        type === 'warning' ? 'text-amber-600' : 'text-blue-600';
+
+      const iconName = type === 'success' ? 'check-circle' :
+        type === 'error' ? 'alert-circle' :
+        type === 'warning' ? 'alert-triangle' : 'info';
+
+      toast.innerHTML = `
+        <i data-lucide="${iconName}" class="w-4 h-4 flex-shrink-0 mt-0.5 ${iconColor}"></i>
+        <div class="flex-1">
+          ${title ? `<strong class="block font-semibold mb-0.5 text-slate-900">${title}</strong>` : ''}
+          <div class="leading-relaxed text-slate-600">${message}</div>
+        </div>
+      `;
+
+      container.appendChild(toast);
+      refreshIcons();
+
+      // Animate in
+      requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      });
+
+      // Auto dismiss
+      setTimeout(() => {
+        toast.classList.add('opacity-0', 'translate-x-4');
+        setTimeout(() => toast.remove(), 300);
+      }, 4000);
+    }
+
+    // Fetch Overview Data from backend
+    async function fetchOverview() {
+      try {
+        const res = await fetch('/api/dashboard/overview');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (json.success && json.data) {
+          state.overview = json.data;
+          renderOverview(json.data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch dashboard overview:', err);
+      }
+    }
+
+    // Render Overview to DOM
+    function renderOverview(data) {
+      const { system, organizations = [], loans = [], leases = [], events = [], desync = {} } = data;
+
+      // 1. Update Header Badges
+      if (system) {
+        const sysBadge = document.getElementById('status-system');
+        const sysText = document.getElementById('system-status-text');
+        if (system.status === 'healthy') {
+          sysBadge.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 font-medium';
+          sysText.innerText = 'Healthy';
+        } else {
+          sysBadge.className = 'flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-800 font-medium';
+          sysText.innerText = 'Degraded';
+        }
+
+        document.getElementById('pg-status-text').innerText = system.postgres;
+        document.getElementById('pg-status-text').className = system.postgres === 'up' ? 'font-semibold text-emerald-700' : 'font-semibold text-rose-700';
+        document.getElementById('redis-status-text').innerText = system.redis;
+        document.getElementById('redis-status-text').className = system.redis === 'up' ? 'font-semibold text-emerald-700' : 'font-semibold text-rose-700';
+        document.getElementById('node-env-text').innerText = system.nodeEnv || 'development';
+      }
+
+      document.getElementById('last-sync-time').innerText = new Date().toLocaleTimeString();
+
+      // 2. Desync Banner
+      const desyncBanner = document.getElementById('desync-banner');
+      const driftDot = document.getElementById('drift-indicator-dot');
+      const driftLabel = document.getElementById('drift-status-label');
+
+      if (desync.detected) {
+        desyncBanner.classList.remove('hidden');
+        document.getElementById('desync-details-text').innerText = desync.details || 'Redis available quota diverges from Postgres Ground Truth!';
+        driftDot.className = 'w-2.5 h-2.5 rounded-full bg-rose-600 animate-pulse';
+        driftLabel.innerText = 'Divergence Detected: Redis cache differs from Postgres ground truth!';
+        driftLabel.className = 'text-rose-700 font-semibold';
+      } else {
+        desyncBanner.classList.add('hidden');
+        driftDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-500';
+        driftLabel.innerText = 'No state divergence detected. System in sync.';
+        driftLabel.className = 'text-slate-700 font-medium';
+      }
+
+      // 3. Render Organization Cards (Alpha & Beta)
+      const alphaOrg = organizations.find(o => o.slug === 'alpha') || organizations[0];
+      const betaOrg = organizations.find(o => o.slug === 'beta') || organizations[1];
+
+      if (alphaOrg) {
+        renderOrgCard('alpha', alphaOrg);
+      }
+      if (betaOrg) {
+        renderOrgCard('beta', betaOrg);
+      }
+
+      // Update simulator key if empty
+      const simKeyInput = document.getElementById('sim-api-key-input');
+      if (!simKeyInput.value && alphaOrg) {
+        simKeyInput.value = alphaOrg.apiKey;
+      }
+
+      // Update Effective Limit badge in simulator
+      updateSimEffectiveLimitDisplay();
+
+      // 4. Render Active Loans Table
+      renderLoans(loans);
+
+      // 5. Render Active Leases Table
+      renderLeases(leases);
+
+      // 6. Render Audit Events
+      state.cachedRawEvents = events;
+      renderEvents(events);
+
+      refreshIcons();
+    }
+
+    // Render Single Org Card
+    function renderOrgCard(prefix, org) {
+      const pool = org.pool || { total: 10000, available: 10000, reserved: 0, loanedOut: 0, received: 0 };
+      const total = pool.total || 1;
+
+      // Stats
+      document.getElementById(`${prefix}-stat-total`).innerText = pool.total.toLocaleString();
+      document.getElementById(`${prefix}-stat-available`).innerText = pool.available.toLocaleString();
+      document.getElementById(`${prefix}-stat-reserved`).innerText = pool.reserved.toLocaleString();
+      
+      const netLoans = (pool.received || 0) - (pool.loanedOut || 0);
+      const netLoansDisplay = netLoans >= 0 ? `+${netLoans}` : `${netLoans}`;
+      document.getElementById(`${prefix}-stat-loans`).innerText = netLoansDisplay;
+
+      // Key display
+      const keyShort = org.apiKey ? `${org.apiKey.substring(0, 16)}...` : 'None';
+      document.getElementById(`${prefix}-key-display`).innerText = keyShort;
+
+      // Multi-segment progress bar percentages
+      const pAvail = Math.max(0, Math.min(100, (pool.available / total) * 100));
+      const pRes = Math.max(0, Math.min(100, (pool.reserved / total) * 100));
+      const pLoaned = Math.max(0, Math.min(100, (pool.loanedOut / total) * 100));
+      const pRecv = Math.max(0, Math.min(100, (pool.received / total) * 100));
+
+      document.getElementById(`${prefix}-bar-available`).style.width = `${pAvail}%`;
+      document.getElementById(`${prefix}-bar-reserved`).style.width = `${pRes}%`;
+      document.getElementById(`${prefix}-bar-loaned`).style.width = `${pLoaned}%`;
+      document.getElementById(`${prefix}-bar-received`).style.width = `${pRecv}%`;
+
+      const utilization = Math.round(((pool.reserved + pool.loanedOut) / total) * 100);
+      document.getElementById(`${prefix}-utilization-text`).innerText = `${utilization}% Committed`;
+    }
+
+    // Render Loans Table
+    function renderLoans(loans) {
+      const tbody = document.getElementById('loans-table-body');
+      const activeCountBadge = document.getElementById('active-loans-count');
+      const activeLoans = loans.filter(l => l.status === 'active');
+      activeCountBadge.innerText = `${activeLoans.length} active`;
+
+      if (!loans || loans.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="4" class="text-center py-4 text-slate-400 font-sans">No active loans. Create one above!</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = loans.slice(0, 8).map(l => {
+        const isLenderAlpha = l.lenderName?.toLowerCase().includes('alpha') || l.lenderOrgId?.includes('1111');
+        const routeBadge = `<span class="px-1.5 py-0.5 rounded text-[10px] font-medium ${isLenderAlpha ? 'bg-slate-100 text-slate-800 border border-slate-200' : 'bg-slate-100 text-slate-800 border border-slate-200'}">${isLenderAlpha ? 'Alpha &rarr; Beta' : 'Beta &rarr; Alpha'}</span>`;
+        
+        let remainingSeconds = 0;
+        if (l.expiresAt) {
+          remainingSeconds = Math.max(0, Math.floor((new Date(l.expiresAt).getTime() - Date.now()) / 1000));
+        }
+
+        const countdownClass = remainingSeconds <= 15 ? 'text-rose-600 font-bold' : 'text-slate-600';
+        const formattedCountdown = l.status === 'active' ? (remainingSeconds > 0 ? `${remainingSeconds}s` : 'Expired') : l.status;
+
+        return `
+          <tr class="hover:bg-slate-50 transition">
+            <td class="py-2 px-3">${routeBadge}</td>
+            <td class="py-2 px-3 font-semibold text-slate-900">${l.amount.toLocaleString()}</td>
+            <td class="py-2 px-3 ${countdownClass}">${formattedCountdown}</td>
+            <td class="py-2 px-3 text-right">
+              ${l.status === 'active' ? `
+                <button onclick="repayLoan('${l.id}')" class="px-2 py-0.5 rounded bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-[10px] font-medium mr-1 shadow-sm">Repay</button>
+                <button onclick="cancelLoan('${l.id}')" class="px-2 py-0.5 rounded bg-white hover:bg-rose-50 text-rose-700 border border-rose-300 text-[10px] font-medium shadow-sm">Cancel</button>
+              ` : `<span class="text-slate-400 text-[10px] capitalize">${l.status}</span>`}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Render Leases Table
+    function renderLeases(leases) {
+      const tbody = document.getElementById('leases-table-body');
+      if (!leases || leases.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="text-center py-6 text-slate-400 font-sans">No active leases. Click "Claim Lease" to expand rate limit!</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = leases.slice(0, 10).map(ls => {
+        let remaining = 0;
+        if (ls.expiresAt) {
+          remaining = Math.max(0, Math.floor((new Date(ls.expiresAt).getTime() - Date.now()) / 1000));
+        }
+        const isAlpha = ls.orgName?.toLowerCase().includes('alpha') || ls.orgId?.includes('1111');
+        const orgPill = `<span class="px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-700 border border-slate-200">${isAlpha ? 'Org Alpha' : 'Org Beta'}</span>`;
+
+        return `
+          <tr class="hover:bg-slate-50 transition">
+            <td class="py-2.5 px-3">${orgPill}</td>
+            <td class="py-2.5 px-3 text-slate-900 font-semibold">+${ls.amount} limit</td>
+            <td class="py-2.5 px-3 ${remaining <= 15 ? 'text-rose-600 font-bold' : 'text-slate-600'}">
+              ${ls.status === 'active' ? (remaining > 0 ? `${remaining}s` : 'Expired') : 'Released'}
+            </td>
+            <td class="py-2.5 px-3">
+              <span class="px-2 py-0.5 rounded text-[10px] font-medium ${ls.status === 'active' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-slate-100 text-slate-500'}">
+                ${ls.status}
+              </span>
+            </td>
+            <td class="py-2.5 px-3 text-right">
+              ${ls.status === 'active' ? `
+                <button onclick="releaseLease('${ls.id}')" class="px-2.5 py-1 rounded bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 text-[10px] font-medium shadow-sm">
+                  Release
+                </button>
+              ` : `<span class="text-slate-400 text-[10px]">-</span>`}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Render Events Stream
+    function renderEvents(events) {
+      const tbody = document.getElementById('events-table-body');
+      let filtered = events;
+      if (state.eventFilter === 'LEASE') {
+        filtered = events.filter(e => e.eventType?.includes('LEASE'));
+      } else if (state.eventFilter === 'LOAN') {
+        filtered = events.filter(e => e.eventType?.includes('LOAN'));
+      } else if (state.eventFilter === 'RECONCILIATION') {
+        filtered = events.filter(e => e.eventType?.includes('RECONCILIATION'));
+      }
+
+      if (!filtered || filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-400 font-sans">No events match filter.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = filtered.slice(0, 15).map(e => {
+        let badgeColor = 'bg-slate-100 text-slate-700 border-slate-200';
+        if (e.eventType?.includes('LEASE_CLAIM')) badgeColor = 'bg-amber-50 text-amber-800 border-amber-200';
+        else if (e.eventType?.includes('LEASE_RELEASE')) badgeColor = 'bg-slate-100 text-slate-700 border-slate-200';
+        else if (e.eventType?.includes('LOAN_CREATE')) badgeColor = 'bg-blue-50 text-blue-800 border-blue-200';
+        else if (e.eventType?.includes('LOAN_REPAY')) badgeColor = 'bg-emerald-50 text-emerald-800 border-emerald-200';
+        else if (e.eventType?.includes('LOAN_CANCEL')) badgeColor = 'bg-rose-50 text-rose-800 border-rose-200';
+        else if (e.eventType?.includes('RECONCILIATION')) badgeColor = 'bg-indigo-50 text-indigo-800 border-indigo-200';
+
+        const timeStr = e.createdAt ? new Date(e.createdAt).toLocaleTimeString() : 'Just now';
+        const isAlpha = e.orgName?.toLowerCase().includes('alpha') || e.orgId?.includes('1111');
+        const orgLabel = isAlpha ? 'Alpha' : 'Beta';
+
+        return `
+          <tr class="hover:bg-slate-50 transition">
+            <td class="py-2 px-3 text-slate-500 whitespace-nowrap">${timeStr}</td>
+            <td class="py-2 px-3"><span class="px-2 py-0.5 rounded text-[10px] font-semibold border ${badgeColor}">${e.eventType}</span></td>
+            <td class="py-2 px-3 text-slate-700 font-medium">${orgLabel}</td>
+            <td class="py-2 px-3 font-semibold ${e.amount > 0 ? 'text-slate-900' : 'text-slate-400'}">${e.amount ? e.amount.toLocaleString() : '0'}</td>
+            <td class="py-2 px-3 text-emerald-700 font-semibold">${e.balanceAfter ? e.balanceAfter.toLocaleString() : '-'}</td>
+            <td class="py-2 px-3 text-slate-500 text-[10px] truncate max-w-xs" title="${e.idempotencyKey || JSON.stringify(e.metadata || {})}">
+              ${e.idempotencyKey || (e.metadata?.reconciledAt ? 'Self-Healing Corrected' : '-')}
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    // Filter Events
+    function filterEvents(type) {
+      state.eventFilter = type;
+      document.querySelectorAll('.event-filter-btn').forEach(btn => {
+        if (btn.dataset.filter === type) {
+          btn.className = 'event-filter-btn px-2.5 py-1 rounded-md bg-slate-900 text-white font-medium';
+        } else {
+          btn.className = 'event-filter-btn px-2.5 py-1 rounded-md bg-white border border-slate-200 text-slate-600 hover:text-slate-900';
+        }
+      });
+      renderEvents(state.cachedRawEvents);
+    }
+
+    // --- LOAN ACTIONS ---
+    function updateLoanSliderLabels() {
+      const amount = document.getElementById('loan-amount-slider').value;
+      const ttl = document.getElementById('loan-ttl-slider').value;
+      document.getElementById('loan-amount-badge').innerText = `${parseInt(amount).toLocaleString()} units`;
+      
+      let ttlFormatted = `${ttl} seconds`;
+      if (ttl >= 60 && ttl < 3600) ttlFormatted = `${Math.round(ttl / 60)} minutes`;
+      else if (ttl >= 3600) ttlFormatted = `${Math.round(ttl / 3600)} hour`;
+      document.getElementById('loan-ttl-badge').innerText = ttlFormatted;
+    }
+
+    function setLoanAmount(val) {
+      document.getElementById('loan-amount-slider').value = val;
+      updateLoanSliderLabels();
+    }
+
+    function setLoanTTL(val) {
+      document.getElementById('loan-ttl-slider').value = val;
+      updateLoanSliderLabels();
+    }
+
+    function syncBorrowerSelect() {
+      const lender = document.getElementById('loan-lender-select').value;
+      const borrowerSelect = document.getElementById('loan-borrower-select');
+      borrowerSelect.value = lender === 'alpha' ? 'beta' : 'alpha';
+    }
+
+    async function handleCreateLoan(e) {
+      e.preventDefault();
+      const lenderSlug = document.getElementById('loan-lender-select').value;
+      const borrowerSlug = lenderSlug === 'alpha' ? 'beta' : 'alpha';
+      const amount = parseInt(document.getElementById('loan-amount-slider').value, 10);
+      const ttlSeconds = parseInt(document.getElementById('loan-ttl-slider').value, 10);
+
+      const orgs = state.overview?.organizations || [];
+      const lender = orgs.find(o => o.slug === lenderSlug) || orgs[0];
+      const borrower = orgs.find(o => o.slug === borrowerSlug) || orgs[1];
+
+      if (!lender || !borrower) {
+        showToast('Organizations not loaded yet', 'error');
+        return;
+      }
+
+      const btn = document.getElementById('create-loan-btn');
+      btn.disabled = true;
+      btn.innerHTML = `<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i><span>Transferring Quota...</span>`;
+      refreshIcons();
+
+      try {
+        const res = await fetch('/api/dashboard/loans', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lenderOrgId: lender.id,
+            borrowerOrgId: borrower.id,
+            amount,
+            ttlSeconds,
+            note: 'Peer-to-Peer Transfer via Dashboard'
+          }),
+        });
+
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          throw new Error(json.error?.message || 'Loan creation failed');
+        }
+
+        showToast(`Transferred ${amount.toLocaleString()} quota from ${lender.name} to ${borrower.name}!`, 'success', 'Loan Created');
+        if (window.confetti) {
+          confetti({ particleCount: 30, spread: 60, origin: { y: 0.8 } });
+        }
+        await fetchOverview();
+      } catch (err) {
+        showToast(err.message, 'error', 'Transfer Failed');
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<i data-lucide="zap" class="w-3.5 h-3.5 text-amber-400"></i><span>Transfer / Create Loan</span>`;
+        refreshIcons();
+      }
+    }
+
+    async function repayLoan(loanId) {
+      try {
+        const res = await fetch(`/api/dashboard/loans/${loanId}/repay`, { method: 'POST' });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(json.error?.message || 'Repay failed');
+        showToast('Loan successfully repaid and quota returned to lender!', 'success', 'Loan Repaid');
+        await fetchOverview();
+      } catch (err) {
+        showToast(err.message, 'error', 'Repay Error');
+      }
+    }
+
+    async function cancelLoan(loanId) {
+      try {
+        const res = await fetch(`/api/dashboard/loans/${loanId}/cancel`, { method: 'POST' });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(json.error?.message || 'Cancel failed');
+        showToast('Loan cancelled by lender and quota reclaimed!', 'info', 'Loan Cancelled');
+        await fetchOverview();
+      } catch (err) {
+        showToast(err.message, 'error', 'Cancel Error');
+      }
+    }
+
+    // --- LEASE ACTIONS ---
+    function openClaimLeaseModal() {
+      document.getElementById('claim-lease-modal').classList.remove('hidden');
+    }
+    function closeClaimLeaseModal() {
+      document.getElementById('claim-lease-modal').classList.add('hidden');
+    }
+
+    async function quickClaimLease(slug, amount, ttlSeconds) {
+      const orgs = state.overview?.organizations || [];
+      const org = orgs.find(o => o.slug === slug) || orgs[0];
+      if (!org) return;
+
+      try {
+        const res = await fetch('/api/dashboard/leases', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orgId: org.id, amount, ttlSeconds }),
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(json.error?.message || 'Lease claim failed');
+        showToast(`Claimed +${amount} quota lease for ${org.name}! Limit increased.`, 'success', 'Lease Active');
+        await fetchOverview();
+      } catch (err) {
+        showToast(err.message, 'error', 'Lease Failed');
+      }
+    }
+
+    async function handleClaimLeaseSubmit(e) {
+      e.preventDefault();
+      const slug = document.getElementById('modal-lease-org').value;
+      const amount = parseInt(document.getElementById('modal-lease-amount').value, 10);
+      const ttlSeconds = parseInt(document.getElementById('modal-lease-ttl').value, 10);
+
+      closeClaimLeaseModal();
+      await quickClaimLease(slug, amount, ttlSeconds);
+    }
+
+    async function releaseLease(leaseId) {
+      try {
+        const res = await fetch(`/api/dashboard/leases/${leaseId}`, { method: 'DELETE' });
+        const json = await res.json();
+        if (!res.ok || !json.success) throw new Error(json.error?.message || 'Release failed');
+        showToast('Lease released successfully! Quota returned to pool.', 'info', 'Lease Released');
+        await fetchOverview();
+      } catch (err) {
+        showToast(err.message, 'error', 'Release Error');
+      }
+    }
+
+    // --- SIMULATOR LOGIC ---
+    function handleSimOrgChange() {
+      const selected = document.getElementById('sim-org-select').value;
+      const orgs = state.overview?.organizations || [];
+      const org = orgs.find(o => o.slug === selected) || orgs[0];
+      if (org) {
+        document.getElementById('sim-api-key-input').value = org.apiKey;
+        updateSimEffectiveLimitDisplay();
+      }
+    }
+
+    function useKeyInSimulator(slug) {
+      document.getElementById('sim-org-select').value = slug;
+      handleSimOrgChange();
+      showToast(`Selected ${slug === 'alpha' ? 'Organization Alpha' : 'Organization Beta'} in Simulator`, 'info');
+    }
+
+    function updateSimEffectiveLimitDisplay() {
+      const selected = document.getElementById('sim-org-select').value;
+      const orgs = state.overview?.organizations || [];
+      const org = orgs.find(o => o.slug === selected) || orgs[0];
+      const reserved = org?.pool?.reserved || 0;
+      const effective = 5 + reserved;
+      document.getElementById('sim-effective-limit-badge').innerText = `${effective} req / 10s (${5} base + ${reserved} leased)`;
+    }
+
+    async function sendSimulatorPing() {
+      const apiKey = document.getElementById('sim-api-key-input').value.trim();
+      const t0 = performance.now();
+      state.simulator.sent++;
+
+      try {
+        let res = await fetch('/api/ping', {
+          method: 'POST',
+          headers: {
+            'X-API-Key': apiKey,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        if (res.status === 500) {
+          res = await fetch('/api/dashboard/ping-proxy', {
+            method: 'POST',
+            headers: {
+              'X-API-Key': apiKey,
+              'Content-Type': 'application/json'
+            }
+          });
+        }
+
+        const t1 = performance.now();
+        const latency = Math.round(t1 - t0);
+
+        if (res.status === 200) {
+          state.simulator.ok++;
+          addWaterfallBadge('200', `${latency}ms`);
+        } else if (res.status === 429) {
+          state.simulator.throttled++;
+          const retryAfter = res.headers.get('Retry-After') || '10';
+          addWaterfallBadge('429', `Wait ${retryAfter}s`);
+          triggerRetryCountdown(parseInt(retryAfter, 10));
+        } else {
+          addWaterfallBadge(`${res.status}`, `${latency}ms`);
+        }
+      } catch (err) {
+        addWaterfallBadge('ERR', 'NetFail');
+      }
+
+      updateSimulatorCounters();
+    }
+
+    function addWaterfallBadge(code, label) {
+      const container = document.getElementById('response-waterfall');
+      if (container.children.length === 1 && container.children[0].tagName === 'SPAN') {
+        container.innerHTML = '';
+      }
+
+      const badge = document.createElement('div');
+      const is200 = code === '200';
+      const is429 = code === '429';
+
+      badge.className = `px-2 py-0.5 rounded border text-[11px] font-mono flex items-center gap-1.5 transition-all ${
+        is200 ? 'bg-emerald-50 border-emerald-300 text-emerald-800' :
+        is429 ? 'bg-rose-50 border-rose-300 text-rose-800 font-bold' :
+        'bg-slate-100 border-slate-300 text-slate-700'
+      }`;
+
+      badge.innerHTML = `<span>${code}</span><span class="text-[9px] opacity-75">(${label})</span>`;
+      container.appendChild(badge);
+
+      while (container.children.length > 50) {
+        container.removeChild(container.firstChild);
+      }
+      container.scrollTop = container.scrollHeight;
+    }
+
+    function clearResponseWaterfall() {
+      document.getElementById('response-waterfall').innerHTML = '<span class="text-slate-400 italic font-sans p-1">Responses will stream here in real-time...</span>';
+    }
+
+    function updateSimulatorCounters() {
+      const { sent, ok, throttled } = state.simulator;
+      document.getElementById('sim-sent-count').innerText = sent;
+      document.getElementById('sim-ok-count').innerText = ok;
+      document.getElementById('sim-throttled-count').innerText = throttled;
+
+      const rate = sent > 0 ? Math.round((ok / sent) * 100) : 100;
+      document.getElementById('sim-pass-rate').innerText = `${rate}%`;
+    }
+
+    function triggerRetryCountdown(seconds) {
+      const alert = document.getElementById('retry-after-alert');
+      const secText = document.getElementById('retry-after-seconds');
+      alert.classList.remove('hidden');
+
+      if (state.simulator.retryTimer) {
+        clearInterval(state.simulator.retryTimer);
+      }
+
+      let remaining = seconds;
+      secText.innerText = remaining;
+
+      state.simulator.retryTimer = setInterval(() => {
+        remaining--;
+        secText.innerText = remaining;
+        if (remaining <= 0) {
+          clearInterval(state.simulator.retryTimer);
+          state.simulator.retryTimer = null;
+          alert.classList.add('hidden');
+        }
+      }, 1000);
+    }
+
+    // Fire Burst of requests
+    async function fireBurst(count = 20) {
+      const burstBtn = document.getElementById('fire-burst-btn');
+      burstBtn.disabled = true;
+      burstBtn.classList.add('opacity-70');
+
+      const promises = [];
+      for (let i = 0; i < count; i++) {
+        promises.push(new Promise(resolve => {
+          setTimeout(async () => {
+            await sendSimulatorPing();
+            resolve();
+          }, i * 30);
+        }));
+      }
+
+      await Promise.all(promises);
+      burstBtn.disabled = false;
+      burstBtn.classList.remove('opacity-70');
+      await fetchOverview();
+    }
+
+    async function fireSingleRequest() {
+      await sendSimulatorPing();
+      await fetchOverview();
+    }
+
+    function toggleContinuousStream() {
+      const btn = document.getElementById('stream-toggle-btn');
+      const btnText = document.getElementById('stream-btn-text');
+      const btnIcon = document.getElementById('stream-btn-icon');
+
+      if (state.isStreaming) {
+        // Stop
+        state.isStreaming = false;
+        clearInterval(state.streamInterval);
+        state.streamInterval = null;
+        btn.className = 'px-3.5 py-2 rounded-lg bg-white hover:bg-slate-50 border border-slate-300 text-slate-700 font-medium text-xs transition shadow-sm flex items-center gap-1.5';
+        btnText.innerText = 'Start Stream';
+        btnIcon.setAttribute('data-lucide', 'play');
+      } else {
+        // Start
+        state.isStreaming = true;
+        btn.className = 'px-3.5 py-2 rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-300 text-rose-800 font-medium text-xs transition shadow-sm flex items-center gap-1.5';
+        btnText.innerText = 'Stop Stream';
+        btnIcon.setAttribute('data-lucide', 'square');
+
+        const rps = parseInt(document.getElementById('rps-slider').value, 10) || 10;
+        const intervalMs = Math.max(20, Math.floor(1000 / rps));
+
+        state.streamInterval = setInterval(() => {
+          sendSimulatorPing();
+        }, intervalMs);
+      }
+      refreshIcons();
+    }
+
+    // --- CHAOS & RECONCILIATION ACTIONS ---
+    async function triggerSimulatedDesync() {
+      try {
+        const res = await fetch('/api/dashboard/chaos/desync', { method: 'POST' });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error?.message || 'Desync trigger failed');
+        showToast('Artificial drift injected into Redis! Desync detected.', 'warning', 'Chaos Injected');
+        await fetchOverview();
+      } catch (err) {
+        showToast(err.message, 'error', 'Chaos Failed');
+      }
+    }
+
+    async function triggerReconciliation() {
+      try {
+        const res = await fetch('/api/dashboard/chaos/reconcile', { method: 'POST' });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error?.message || 'Reconciliation failed');
+        
+        document.getElementById('healed-banner').classList.remove('hidden');
+        showToast('Redis Materialized View restored from PostgreSQL Ground Truth!', 'success', 'Reconciliation Healed');
+        if (window.confetti) {
+          confetti({ particleCount: 40, spread: 60, origin: { y: 0.6 } });
+        }
+        await fetchOverview();
+      } catch (err) {
+        showToast(err.message, 'error', 'Reconciliation Failed');
+      }
+    }
+
+    document.getElementById('reconcile-quick-btn').onclick = triggerReconciliation;
+
+    // --- UTILS ---
+    function copyToClipboard(slug) {
+      const orgs = state.overview?.organizations || [];
+      const org = orgs.find(o => o.slug === slug) || orgs[0];
+      if (org && org.apiKey) {
+        navigator.clipboard.writeText(org.apiKey);
+        showToast(`Copied ${org.name} API key to clipboard`, 'info');
+      }
+    }
+
+    // Manual Refresh button click
+    document.getElementById('manual-refresh-btn').onclick = async () => {
+      const icon = document.getElementById('refresh-icon');
+      icon.classList.add('animate-spin');
+      await fetchOverview();
+      setTimeout(() => icon.classList.remove('animate-spin'), 600);
+    };
+
+    // Auto-refresh toggle
+    document.getElementById('auto-refresh-toggle').onchange = (e) => {
+      state.autoRefresh = e.target.checked;
+      if (state.autoRefresh) {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    function startPolling() {
+      if (state.refreshInterval) clearInterval(state.refreshInterval);
+      state.refreshInterval = setInterval(fetchOverview, 2000);
+    }
+
+    function stopPolling() {
+      if (state.refreshInterval) {
+        clearInterval(state.refreshInterval);
+        state.refreshInterval = null;
+      }
+    }
+
+    // Bootstrap
+    window.addEventListener('DOMContentLoaded', async () => {
+      refreshIcons();
+      updateLoanSliderLabels();
+      await fetchOverview();
+      startPolling();
+    });
+  </script>
+</body>
+</html>

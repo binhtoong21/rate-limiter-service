@@ -32,11 +32,18 @@ export const authPlugin = fp(async (fastify, opts) => {
   fastify.decorateRequest('auth', null as unknown as AuthContext);
 
   fastify.addHook('onRequest', async (request: FastifyRequest, reply: FastifyReply) => {
-    // Skip auth for health, metrics, and dev routes
+    // Skip auth for health, metrics, dev, bench, docs, and dashboard routes
     if (
       request.url.startsWith('/health') || 
       request.url.startsWith('/metrics') || 
-      request.url.startsWith('/dev/')
+      request.url.startsWith('/dev/') ||
+      request.url.startsWith('/bench/') ||
+      request.url.startsWith('/docs') ||
+      request.url === '/' ||
+      request.url.startsWith('/dashboard') ||
+      request.url.startsWith('/public') ||
+      request.url.startsWith('/api/dashboard') ||
+      request.url === '/favicon.ico'
     ) {
       return;
     }
@@ -47,12 +54,12 @@ export const authPlugin = fp(async (fastify, opts) => {
 
     if (!apiKey) {
       timer();
-      return reply.status(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Missing API Key' } });
+      return reply.status(401).send({ success: false, error: { code: 'MISSING_API_KEY', message: 'Missing API Key' } });
     }
 
     if (!AuthService.isValidFormat(apiKey)) {
       timer();
-      return reply.status(401).send({ success: false, error: { code: 'UNAUTHORIZED', message: 'Invalid API Key format' } });
+      return reply.status(401).send({ success: false, error: { code: 'INVALID_API_KEY', message: 'Invalid API Key format' } });
     }
 
     const keyHash = AuthService.hashApiKey(apiKey);
@@ -104,8 +111,11 @@ export const authPlugin = fp(async (fastify, opts) => {
           .where(eq(apiKeys.keyHash, keyHash))
           .limit(1);
 
-        if (!record || record.status !== 'active') {
-          throw { statusCode: 401, code: 'INVALID_API_KEY', message: 'Invalid or revoked API Key' };
+        if (!record) {
+          throw { statusCode: 401, code: 'INVALID_API_KEY', message: 'Invalid API Key' };
+        }
+        if (record.status !== 'active') {
+          throw { statusCode: 401, code: 'API_KEY_REVOKED', message: 'API Key revoked' };
         }
 
         const ctx: AuthContext = {

@@ -4,13 +4,140 @@ import { loans } from '../../db/schema';
 import { eq, or, and, desc, sql } from 'drizzle-orm';
 import { LoanService, NotFoundError, ConflictError } from '../../services/loan.service';
 
+const loanSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    lender_org_id: { type: 'string', format: 'uuid' },
+    borrower_org_id: { type: 'string', format: 'uuid' },
+    amount: { type: 'integer', example: 2000 },
+    status: { type: 'string', enum: ['active', 'repaid', 'expired', 'cancelled'], example: 'active' },
+    note: { type: ['string', 'null'], nullable: true, example: 'Cross-cluster assistance' },
+    created_at: { type: 'string', format: 'date-time' },
+    expires_at: { type: 'string', format: 'date-time' },
+    settled_at: { type: ['string', 'null'], format: 'date-time', nullable: true },
+  },
+  required: ['id', 'lender_org_id', 'borrower_org_id', 'amount', 'status', 'created_at', 'expires_at'],
+  additionalProperties: true,
+};
+
+const settledLoanSchema = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    status: { type: 'string', enum: ['repaid', 'cancelled'], example: 'repaid' },
+    settled_at: { type: 'string', format: 'date-time' },
+  },
+  required: ['id', 'status', 'settled_at'],
+  additionalProperties: true,
+};
+
 const loansRoutes: FastifyPluginAsync = async (fastify) => {
   const loanService = new LoanService(fastify);
 
   fastify.post<{
-    Body: { borrower_org_id: string; amount: number; ttl_seconds: number; note?: string };
+    Body: { borrower_org_id: string; amount: number; ttl_seconds?: number; note?: string };
     Headers: { 'x-idempotency-key': string };
-  }>('/', async (request, reply) => {
+  }>('/', {
+    schema: {
+      tags: ['Loans'],
+      summary: 'Create peer-to-peer quota loan',
+      description: 'Admin-only endpoint. Creates an atomic quota loan from caller organization to borrower organization with a specified TTL.',
+      security: [{ ApiKeyAuth: [] }],
+      headers: {
+        type: 'object',
+        properties: {
+          'x-idempotency-key': { type: 'string', description: 'Unique idempotency key' },
+        },
+        required: ['x-idempotency-key'],
+      },
+      body: {
+        type: 'object',
+        required: ['borrower_org_id', 'amount'],
+        properties: {
+          borrower_org_id: { type: 'string', format: 'uuid', description: 'Target borrower organization UUID' },
+          amount: { type: 'integer', minimum: 1, description: 'Loan quota amount' },
+          ttl_seconds: { type: 'integer', minimum: 1, maximum: 2592000, description: 'Loan duration in seconds (default 3600, max 30 days)' },
+          note: { type: 'string', description: 'Optional context note' },
+        },
+      },
+      response: {
+        201: {
+          description: 'Loan created successfully',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: loanSchema,
+          },
+          required: ['success', 'data'],
+        },
+        400: {
+          description: 'Validation error or self-loan prohibited',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'VALIDATION_ERROR' },
+                message: { type: 'string' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        403: {
+          description: 'Forbidden - admin access required',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'FORBIDDEN' },
+                message: { type: 'string', example: 'Admin access required' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        409: {
+          description: 'Idempotency collision conflict',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'IDEMPOTENCY_STATE_ERROR' },
+                message: { type: 'string' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        422: {
+          description: 'Insufficient quota available to create loan',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'INSUFFICIENT_QUOTA' },
+                message: { type: 'string', example: 'Not enough quota available' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+      },
+    },
+  }, async (request, reply) => {
     // Admin only guard
     if (!request.auth.isAdmin) {
       return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
@@ -78,7 +205,86 @@ const loansRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post<{
     Params: { id: string };
     Headers: { 'x-idempotency-key'?: string };
-  }>('/:id/repay', async (request, reply) => {
+  }>('/:id/repay', {
+    schema: {
+      tags: ['Loans'],
+      summary: 'Repay an active quota loan',
+      description: 'Admin-only endpoint. Borrower repays the active loan back to lender org.',
+      security: [{ ApiKeyAuth: [] }],
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid', description: 'Loan UUID' },
+        },
+      },
+      headers: {
+        type: 'object',
+        properties: {
+          'x-idempotency-key': { type: 'string', description: 'Optional idempotency key' },
+        },
+      },
+      response: {
+        200: {
+          description: 'Loan repaid successfully',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: settledLoanSchema,
+          },
+          required: ['success', 'data'],
+        },
+        403: {
+          description: 'Forbidden - only borrower can repay loan',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'FORBIDDEN' },
+                message: { type: 'string', example: 'Only the borrower can repay the loan' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        404: {
+          description: 'Loan not found',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'NOT_FOUND' },
+                message: { type: 'string', example: 'Loan not found' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        409: {
+          description: 'Loan already settled or cancelled',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'LOAN_ALREADY_SETTLED' },
+                message: { type: 'string', example: 'This loan has already been settled or cancelled' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+      },
+    },
+  }, async (request, reply) => {
     if (!request.auth.isAdmin) {
       return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
@@ -118,7 +324,86 @@ const loansRoutes: FastifyPluginAsync = async (fastify) => {
   fastify.post<{
     Params: { id: string };
     Headers: { 'x-idempotency-key'?: string };
-  }>('/:id/cancel', async (request, reply) => {
+  }>('/:id/cancel', {
+    schema: {
+      tags: ['Loans'],
+      summary: 'Cancel an active quota loan',
+      description: 'Admin-only endpoint. Lender cancels an active loan and reclaims quota.',
+      security: [{ ApiKeyAuth: [] }],
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid', description: 'Loan UUID' },
+        },
+      },
+      headers: {
+        type: 'object',
+        properties: {
+          'x-idempotency-key': { type: 'string', description: 'Optional idempotency key' },
+        },
+      },
+      response: {
+        200: {
+          description: 'Loan cancelled successfully',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: settledLoanSchema,
+          },
+          required: ['success', 'data'],
+        },
+        403: {
+          description: 'Forbidden - only lender can cancel loan',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'FORBIDDEN' },
+                message: { type: 'string', example: 'Only the lender can cancel the loan' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        404: {
+          description: 'Loan not found',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'NOT_FOUND' },
+                message: { type: 'string', example: 'Loan not found' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        409: {
+          description: 'Loan already settled or cancelled',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'LOAN_ALREADY_SETTLED' },
+                message: { type: 'string', example: 'This loan has already been settled or cancelled' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+      },
+    },
+  }, async (request, reply) => {
     if (!request.auth.isAdmin) {
       return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
@@ -157,7 +442,60 @@ const loansRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get<{
     Querystring: { role?: 'lender' | 'borrower'; status?: 'active' | 'settled'; limit?: string; cursor?: string };
-  }>('/', async (request, reply) => {
+  }>('/', {
+    schema: {
+      tags: ['Loans'],
+      summary: 'List organization quota loans',
+      description: 'Admin-only endpoint. Lists quota loans for caller organization with optional role and status filters, and cursor-based pagination.',
+      security: [{ ApiKeyAuth: [] }],
+      querystring: {
+        type: 'object',
+        properties: {
+          role: { type: 'string', enum: ['lender', 'borrower'], description: 'Filter loans by role' },
+          status: { type: 'string', enum: ['active', 'settled'], description: 'Filter loans by status' },
+          limit: { type: 'string', description: 'Page limit (1-100, default 50)' },
+          cursor: { type: 'string', description: 'Base64 cursor for next page' },
+        },
+      },
+      response: {
+        200: {
+          description: 'Paginated list of loans',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: {
+              type: 'array',
+              items: loanSchema,
+            },
+            meta: {
+              type: 'object',
+              properties: {
+                next_cursor: { type: ['string', 'null'], nullable: true },
+              },
+              required: ['next_cursor'],
+            },
+          },
+          required: ['success', 'data', 'meta'],
+        },
+        403: {
+          description: 'Forbidden - admin access required',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'FORBIDDEN' },
+                message: { type: 'string', example: 'Admin access required' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+      },
+    },
+  }, async (request, reply) => {
     if (!request.auth.isAdmin) {
       return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
@@ -229,7 +567,64 @@ const loansRoutes: FastifyPluginAsync = async (fastify) => {
 
   fastify.get<{
     Params: { id: string };
-  }>('/:id', async (request, reply) => {
+  }>('/:id', {
+    schema: {
+      tags: ['Loans'],
+      summary: 'Get quota loan by ID',
+      description: 'Admin-only endpoint. Retrieves details for a specific quota loan.',
+      security: [{ ApiKeyAuth: [] }],
+      params: {
+        type: 'object',
+        required: ['id'],
+        properties: {
+          id: { type: 'string', format: 'uuid', description: 'Loan UUID' },
+        },
+      },
+      response: {
+        200: {
+          description: 'Loan details',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: loanSchema,
+          },
+          required: ['success', 'data'],
+        },
+        403: {
+          description: 'Forbidden - admin access required',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'FORBIDDEN' },
+                message: { type: 'string', example: 'Admin access required' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+        404: {
+          description: 'Loan not found',
+          type: 'object',
+          properties: {
+            success: { type: 'boolean', example: false },
+            error: {
+              type: 'object',
+              properties: {
+                code: { type: 'string', example: 'NOT_FOUND' },
+                message: { type: 'string', example: 'Loan not found' },
+              },
+              required: ['code', 'message'],
+            },
+          },
+          required: ['success', 'error'],
+        },
+      },
+    },
+  }, async (request, reply) => {
     if (!request.auth.isAdmin) {
       return reply.status(403).send({ success: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } });
     }
