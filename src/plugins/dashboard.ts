@@ -15,6 +15,7 @@ import { PING_BASE_LIMIT, PING_WINDOW_MS } from '../config/rate-limits';
 import { chaosAllowed, startRedisOutage, stopRedisOutage, redisOutageEndsAt } from '../chaos/redis-outage';
 import { reconcileOrg } from '../services/reconciliation.service';
 import { demoEnabled } from '../config/demo';
+import { deficitSince, DEFICIT_GRACE_MS } from '../services/deficit.service';
 
 
 
@@ -303,7 +304,11 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
               desyncDetails = `Leased quota (${reserved}) does not match the lease sum used by the rate limiter (${activeLeaseSum}) for org ${orgId}`;
             }
 
-            return { total, reserved, loanedOut, received, available, activeLeaseSum };
+            return {
+              total, reserved, loanedOut, received, available, activeLeaseSum,
+              deficitSince: await deficitSince(orgId),
+              deficitGraceMs: DEFICIT_GRACE_MS,
+            };
           };
 
           const alphaPool = await readPool(alpha.id, alpha.quotaAllocated);

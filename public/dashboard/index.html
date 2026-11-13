@@ -826,6 +826,7 @@
             <div style="display:flex;gap:6px;margin-top:3px;flex-wrap:wrap">
               <span class="tag" title="${o.failOpen ? 'If Redis is down, requests are allowed' : 'If Redis is down, requests are rejected'}">${o.failOpen ? 'Fail-open' : 'Fail-closed'}</span>
               ${p.received ? `<span class="tag lent">+${fmt(p.received)} borrowed</span>` : ''}
+              ${p.available < 0 ? `<span class="tag bad" title="A lender took back quota this org still has leased. New leases are refused; after the grace period the newest leases are revoked.">Deficit ${fmt(-p.available)}${p.deficitSince ? ' · revoking in ' + Math.max(0, Math.ceil((p.deficitSince + p.deficitGraceMs - Date.now()) / 1000)) + 's' : ''}</span>` : ''}
             </div>
           </div>
         </div>

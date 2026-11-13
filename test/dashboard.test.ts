@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app';
+import { and, eq } from 'drizzle-orm';
+import { db } from '../src/db';
+import { quotaEvents } from '../src/db/schema';
+import { enforceDeficit } from '../src/services/deficit.service';
 
 // Integration tests: need PostgreSQL + Redis from docker-compose (run: docker compose up -d postgres redis).
 describe('Dashboard (real PostgreSQL + Redis)', () => {
@@ -199,5 +203,47 @@ describe('Dashboard (real PostgreSQL + Redis)', () => {
     const repay = await app.inject({ method: 'POST', url: `/api/dashboard/loans/${loan.id}/repay` });
     expect(repay.statusCode).toBe(200);
     expect(org(await overview(), 'beta').pool.available).toBe(before);
+  });
+
+  it('a recall that leaves the borrower short creates a deficit, then the newest lease is revoked', async () => {
+    const before = org(await overview(), 'beta').pool.available;
+    const loanRes = await app.inject({
+      method: 'POST', url: '/api/dashboard/loans',
+      payload: { lenderOrgId: alpha.id, borrowerOrgId: beta.id, amount: 100, ttlSeconds: 60 },
+    });
+    expect(loanRes.statusCode).toBe(201);
+    const loan = JSON.parse(loanRes.payload).data;
+    const leaseRes = await app.inject({
+      method: 'POST', url: '/api/dashboard/leases',
+      payload: { orgId: beta.id, amount: before + 100, ttlSeconds: 60 },
+    });
+    expect(leaseRes.statusCode).toBe(201);
+    const lease = JSON.parse(leaseRes.payload).data;
+
+    const recall = await app.inject({ method: 'POST', url: `/api/dashboard/loans/${loan.id}/cancel` });
+    expect(recall.statusCode).toBe(200);
+    expect(org(await overview(), 'beta').pool.available).toBe(-100);
+
+    const extra = await app.inject({
+      method: 'POST', url: '/api/dashboard/leases',
+      payload: { orgId: beta.id, amount: 1, ttlSeconds: 60 },
+    });
+    expect(extra.statusCode).toBe(422);
+
+    const waiting = await enforceDeficit(app, beta.id, { graceMs: 60_000 });
+    expect(waiting).toEqual({ deficit: 100, revokedLeaseIds: [] });
+    expect(org(await overview(), 'beta').pool.deficitSince).toEqual(expect.any(Number));
+
+    const enforced = await enforceDeficit(app, beta.id, { graceMs: 0 });
+    expect(enforced).toEqual({ deficit: 0, revokedLeaseIds: [lease.id] });
+    const after = org(await overview(), 'beta').pool;
+    expect(after.available).toBe(before);
+    expect(after.deficitSince).toBeNull();
+
+    const ev = await db
+      .select()
+      .from(quotaEvents)
+      .where(and(eq(quotaEvents.leaseId, lease.id), eq(quotaEvents.eventType, 'LEASE_RELEASE')));
+    expect(ev[0].metadata).toMatchObject({ reason: 'DEFICIT_CLAWBACK' });
   });
 });
