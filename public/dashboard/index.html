@@ -1,0 +1,1157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RatePulse Control Room</title>
+  <style>
+    :root {
+      --bg: #f6f7f9; --surface: #ffffff; --surface-2: #f1f3f6; --border: #e3e6eb; --border-strong: #cfd4dc;
+      --text: #14171c; --text-2: #4b5260; --text-3: #808796;
+      --accent: #2f5bea; --accent-soft: #e8eefe;
+      --ok: #1f9d55; --ok-soft: #e4f5eb; --warn: #c27c0e; --warn-soft: #fdf2dc; --bad: #d33a3a; --bad-soft: #fde8e8;
+      --lent: #6d5bd0; --lent-soft: #eeebfb;
+      --seg-avail: #2fb36b; --seg-res: #e9a23b; --seg-lent: #8a7be3;
+      --shadow: 0 1px 2px rgba(16,24,40,.04), 0 1px 3px rgba(16,24,40,.06);
+      --radius: 12px;
+      --mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --bg: #0e1116; --surface: #161a21; --surface-2: #1d222b; --border: #262c36; --border-strong: #353d4a;
+        --text: #e8ebf0; --text-2: #a9b0bd; --text-3: #6f7786; --accent: #6c8cff; --accent-soft: #1d2640;
+        --ok: #3ccf7f; --ok-soft: #12291d; --warn: #f0b04a; --warn-soft: #2d2311; --bad: #f06868; --bad-soft: #301617;
+        --lent: #a597f5; --lent-soft: #221e3a; --seg-avail: #2fae68; --seg-res: #d9952f; --seg-lent: #8576df; --shadow: none;
+      }
+    }
+    :root[data-theme="dark"] {
+      --bg: #0e1116; --surface: #161a21; --surface-2: #1d222b; --border: #262c36; --border-strong: #353d4a;
+      --text: #e8ebf0; --text-2: #a9b0bd; --text-3: #6f7786; --accent: #6c8cff; --accent-soft: #1d2640;
+      --ok: #3ccf7f; --ok-soft: #12291d; --warn: #f0b04a; --warn-soft: #2d2311; --bad: #f06868; --bad-soft: #301617;
+      --lent: #a597f5; --lent-soft: #221e3a; --seg-avail: #2fae68; --seg-res: #d9952f; --seg-lent: #8576df; --shadow: none;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body { background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; -webkit-font-smoothing: antialiased; }
+    button, input, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .5; }
+    a { color: inherit; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .num { font-variant-numeric: tabular-nums; }
+    .mono { font-family: var(--mono); font-size: 12px; }
+    .muted { color: var(--text-2); } .faint { color: var(--text-3); }
+    svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* ---------- Top bar ---------- */
+    .topbar { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--border); }
+    .topbar-inner { padding: 10px 16px; display: flex; align-items: center; gap: 10px; }
+    .brand { display: flex; align-items: center; gap: 10px; margin-right: auto; min-width: 0; }
+    .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--text); color: var(--bg); display: grid; place-items: center; }
+    .brand b { font-size: 15px; letter-spacing: -.01em; }
+    .brand span { color: var(--text-3); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface); font-size: 13px; white-space: nowrap; text-decoration: none; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; display: inline-block; }
+    .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); } .dot.idle { background: var(--text-3); }
+    .dot.live { animation: ping 2s infinite; }
+    @keyframes ping { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 55%, transparent); } 70%, 100% { box-shadow: 0 0 0 6px transparent; } }
+    .icon-btn { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); display: grid; place-items: center; color: var(--text-2); }
+    .icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
+
+    /* ---------- Shell: sidebar + content ---------- */
+    .shell { display: grid; grid-template-columns: 232px minmax(0, 1fr); min-height: calc(100vh - 51px); }
+    .side { border-right: 1px solid var(--border); padding: 16px 10px; position: sticky; top: 51px; height: calc(100vh - 51px); overflow-y: auto; }
+    .side-label { font-size: 11.5px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: .06em; padding: 0 10px; margin: 14px 0 6px; }
+    .side-label:first-child { margin-top: 0; }
+    .nav-link { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; text-decoration: none; color: var(--text-2); font-size: 13.5px; }
+    .nav-link:hover { background: var(--surface-2); color: var(--text); }
+    .nav-link[aria-current="page"] { background: var(--surface); color: var(--text); font-weight: 600; box-shadow: var(--shadow); border: 1px solid var(--border); padding: 7px 9px; }
+    .nav-link .badge { margin-left: auto; font-size: 11.5px; color: var(--text-3); font-weight: 500; }
+    .nav-link .badge .dot { vertical-align: 1px; }
+    .side-note { margin: 18px 10px 0; padding: 12px; border-radius: 10px; background: var(--surface-2); font-size: 12px; color: var(--text-3); line-height: 1.5; }
+    .side-note b { color: var(--text-2); }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: minmax(0, 1fr); }
+      .side { position: sticky; top: 51px; z-index: 20; height: auto; display: flex; gap: 4px; overflow-x: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--border); background: var(--bg); }
+      .side-label, .side-note { display: none; }
+      .nav-link { white-space: nowrap; flex: none; }
+    }
+
+    .content { padding: 22px 24px 56px; min-width: 0; }
+    @media (max-width: 640px) { .content { padding: 18px 16px 48px; } }
+    .view { max-width: 1160px; display: grid; gap: 20px; }
+    .view[hidden] { display: none; }
+    .view-head h1 { margin: 0; font-size: 21px; letter-spacing: -.02em; }
+    .view-head p { margin: 4px 0 0; color: var(--text-2); max-width: 720px; }
+    .relate { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .relate a { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); text-decoration: none; padding: 5px 10px; border-radius: 999px; border: 1px dashed var(--border-strong); }
+    .relate a:hover { color: var(--text); border-style: solid; }
+    .relate a b { color: var(--text); font-weight: 600; }
+
+    /* ---------- Alerts ---------- */
+    .alert-box { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); background: var(--warn-soft); }
+    .alert-box[hidden] { display: none; }
+    .alert-box .grow { flex: 1; min-width: 0; }
+    .alert-box b { display: block; }
+    .alerts { display: grid; gap: 10px; max-width: 1160px; }
+    .alerts:empty { display: none; }
+
+    /* ---------- Cards ---------- */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); min-width: 0; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+    .card-head h3 { margin: 0; font-size: 14px; }
+    .card-head p { margin: 2px 0 0; font-size: 12.5px; color: var(--text-3); }
+    .card-body { padding: 18px; }
+    .cols { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
+    .cols.even { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+    @media (max-width: 1100px) { .cols, .cols.even { grid-template-columns: minmax(0, 1fr); } }
+    .stack { display: grid; gap: 16px; align-content: start; }
+
+    /* ---------- Pools ---------- */
+    .pools { display: grid; grid-template-columns: minmax(0, 1fr) 150px minmax(0, 1fr); }
+    @media (max-width: 760px) { .pools { grid-template-columns: minmax(0, 1fr); } .flow { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); flex-direction: row !important; } }
+    .org-card { padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+    .org-top { display: flex; align-items: center; gap: 10px; }
+    .org-badge { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-weight: 700; background: var(--surface-2); border: 1px solid var(--border); flex: none; }
+    .org-name { font-weight: 600; }
+    .tag { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); background: var(--surface-2); white-space: nowrap; }
+    .tag.ok { color: var(--ok); background: var(--ok-soft); border-color: transparent; }
+    .tag.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+    .tag.bad { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+    .tag.lent { color: var(--lent); background: var(--lent-soft); border-color: transparent; }
+    .big { font-size: 30px; font-weight: 650; letter-spacing: -.02em; line-height: 1.1; }
+    .big small { font-size: 14px; font-weight: 500; color: var(--text-3); letter-spacing: 0; }
+    .bar { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; display: flex; gap: 2px; }
+    .bar > i { display: block; height: 100%; transition: width .5s ease; }
+    .s-avail { background: var(--seg-avail); } .s-res { background: var(--seg-res); } .s-lent { background: var(--seg-lent); }
+    .legend { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .legend div { font-size: 12px; color: var(--text-3); }
+    .legend b { display: block; font-size: 14px; color: var(--text); font-weight: 600; }
+    .legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+    .flow { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 12px; }
+    .flow-lane { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 12px; color: var(--text-3); text-align: center; }
+    .flow-lane b { font-size: 14px; color: var(--text); }
+    .flow-lane.active b { color: var(--lent); }
+    .arrow { width: 100%; min-width: 60px; height: 14px; position: relative; }
+    .arrow::before { content: ""; position: absolute; left: 6px; right: 6px; top: 6px; height: 2px; background: var(--border-strong); }
+    .arrow::after { content: ""; position: absolute; top: 2px; border-top: 5px solid transparent; border-bottom: 5px solid transparent; }
+    .arrow.r::after { right: 2px; border-left: 7px solid var(--border-strong); }
+    .arrow.l::after { left: 2px; border-right: 7px solid var(--border-strong); }
+    .flow-lane.active .arrow::before { background: linear-gradient(90deg, var(--lent) 50%, transparent 50%); background-size: 12px 2px; animation: dash .8s linear infinite; }
+    .flow-lane.active .arrow.l::before { animation-direction: reverse; }
+    .flow-lane.active .arrow.r::after { border-left-color: var(--lent); }
+    .flow-lane.active .arrow.l::after { border-right-color: var(--lent); }
+    @keyframes dash { to { background-position: 12px 0; } }
+
+    /* ---------- Overview area cards ---------- */
+    .areas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+    @media (max-width: 1000px) { .areas { grid-template-columns: minmax(0, 1fr); } }
+    .area { display: flex; flex-direction: column; gap: 12px; padding: 18px; text-decoration: none; transition: border-color .15s; }
+    .area:hover { border-color: var(--border-strong); }
+    .area-top { display: flex; align-items: center; gap: 10px; }
+    .area-ico { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; }
+    .area h3 { margin: 0; font-size: 14.5px; }
+    .area p { margin: 0; font-size: 13px; color: var(--text-3); }
+    .area-stats { display: grid; gap: 6px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 13px; }
+    .area-stats div { display: flex; justify-content: space-between; gap: 8px; }
+    .area-stats span:last-child { font-weight: 600; }
+    .area-go { margin-top: auto; font-size: 13px; color: var(--accent); font-weight: 550; }
+    .ico-trade { background: var(--lent-soft); color: var(--lent); }
+    .ico-limit { background: var(--accent-soft); color: var(--accent); }
+    .ico-res { background: var(--ok-soft); color: var(--ok); }
+    .ico-res.warn { background: var(--warn-soft); color: var(--warn); }
+
+    /* ---------- Controls ---------- */
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 0 14px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); font-weight: 500; font-size: 13px; white-space: nowrap; text-decoration: none; }
+    .btn:hover:not(:disabled) { background: var(--surface-2); }
+    .btn.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+    .btn.primary:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 85%, var(--bg)); }
+    .btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+    .btn.danger:hover:not(:disabled) { background: var(--bad-soft); }
+    .btn.on { background: var(--bad-soft); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+    .btn.sm { height: 28px; padding: 0 10px; font-size: 12.5px; }
+    .btn.block { width: 100%; height: 40px; }
+    .seg { display: inline-flex; padding: 3px; gap: 2px; border-radius: 9px; background: var(--surface-2); border: 1px solid var(--border); }
+    .seg button { border: 0; background: transparent; height: 28px; padding: 0 12px; border-radius: 6px; font-size: 13px; color: var(--text-2); white-space: nowrap; }
+    .seg button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); font-weight: 550; }
+    .seg.full { display: flex; } .seg.full button { flex: 1; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chip { height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); font-size: 12.5px; color: var(--text-2); }
+    .chip:hover { border-color: var(--border-strong); color: var(--text); }
+    .chip[aria-pressed="true"] { border-color: var(--text); color: var(--text); font-weight: 550; }
+    .field { display: grid; gap: 6px; }
+    .field-label { font-size: 12.5px; font-weight: 550; color: var(--text-2); display: flex; justify-content: space-between; gap: 8px; }
+    .field-label span { font-weight: 400; color: var(--text-3); }
+    .input { height: 36px; width: 100%; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); }
+    .input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+    .input.invalid { border-color: var(--bad); }
+    .hint { font-size: 12.5px; color: var(--text-3); }
+    .hint:empty { display: none; }
+    .hint.bad { color: var(--bad); }
+    .summary-box { padding: 10px 12px; border-radius: 9px; background: var(--surface-2); font-size: 13px; color: var(--text-2); }
+    .summary-box b { color: var(--text); }
+
+    /* ---------- Rate limiting ---------- */
+    .limit-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    @media (max-width: 640px) { .limit-tiles { grid-template-columns: minmax(0, 1fr); } }
+    .limit-tile { padding: 16px 18px; display: grid; gap: 10px; }
+    .limit-eq { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; color: var(--text-3); }
+    .limit-eq b { font-size: 15px; color: var(--text); }
+    .limit-eq .total { font-size: 22px; font-weight: 650; color: var(--text); letter-spacing: -.01em; }
+    .sim-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+    .sim-controls .spacer { flex: 1; }
+    .sim-body { padding: 18px; display: grid; gap: 16px; }
+    .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    @media (max-width: 560px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .kpi { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); }
+    .kpi span { font-size: 12px; color: var(--text-3); }
+    .kpi b { display: block; font-size: 20px; font-weight: 650; }
+    .kpi.ok b { color: var(--ok); } .kpi.bad b { color: var(--bad); }
+    .window-top { display: flex; justify-content: space-between; font-size: 13px; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+    .window-bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+    .window-bar i { display: block; height: 100%; background: var(--accent); transition: width .25s ease, background .25s; }
+    .chart { position: relative; height: 140px; display: flex; align-items: flex-end; gap: 3px; border-bottom: 1px solid var(--border); }
+    .chart .col { flex: 1; display: flex; flex-direction: column-reverse; min-width: 0; height: 100%; }
+    .chart .col i { display: block; width: 100%; transition: height .2s ease; }
+    .chart .c-ok { background: var(--seg-avail); } .chart .c-bad { background: var(--bad); }
+    .chart-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-3); font-size: 13px; text-align: center; padding: 0 12px; }
+    .chart-axis { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--text-3); margin-top: 4px; }
+    .chart-legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-3); flex-wrap: wrap; }
+    .chart-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+    .throttle { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: 9px; background: var(--bad-soft); color: var(--bad); font-size: 13px; }
+    .throttle[hidden] { display: none; }
+    details.adv summary { cursor: pointer; font-size: 12.5px; color: var(--text-3); }
+    details.adv[open] summary { margin-bottom: 8px; }
+
+    /* ---------- Resilience ---------- */
+    .pipeline { display: grid; grid-template-columns: minmax(0, 1fr) 70px minmax(0, 1fr) 70px minmax(0, 1fr); align-items: center; gap: 0; padding: 22px 18px; }
+    @media (max-width: 820px) { .pipeline { grid-template-columns: minmax(0, 1fr); gap: 10px; } .pipe-arrow { transform: rotate(90deg); justify-self: center; } }
+    .node { padding: 14px; border-radius: 10px; border: 1px solid var(--border); background: var(--surface-2); display: grid; gap: 4px; }
+    .node b { font-size: 13.5px; }
+    .node span { font-size: 12.5px; color: var(--text-3); }
+    .node.bad { border-color: color-mix(in srgb, var(--bad) 50%, transparent); background: var(--bad-soft); }
+    .node.warn { border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: var(--warn-soft); }
+    .pipe-arrow { display: grid; place-items: center; color: var(--text-3); font-size: 11.5px; text-align: center; }
+    .chaos-step { display: flex; gap: 12px; padding: 14px; border-radius: 10px; border: 1px solid var(--border); }
+    .chaos-step .n { width: 24px; height: 24px; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); font-size: 12px; font-weight: 600; }
+    .chaos-step p { margin: 2px 0 10px; font-size: 12.5px; color: var(--text-3); }
+
+    /* ---------- Lists ---------- */
+    .list { display: grid; }
+    .scroll { max-height: 460px; overflow-y: auto; }
+    .item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+    .item:last-child { border-bottom: 0; }
+    .item.settled { opacity: .65; }
+    .item-icon { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; }
+    .item-icon.loan { background: var(--lent-soft); color: var(--lent); }
+    .item-icon.lease { background: var(--warn-soft); color: var(--warn); }
+    .item-title { font-weight: 550; font-size: 13.5px; }
+    .item-sub { font-size: 12.5px; color: var(--text-3); display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+    .ttl-bar { flex: 1; max-width: 160px; height: 4px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+    .ttl-bar i { display: block; height: 100%; background: var(--text-3); transition: width 1s linear; }
+    .ttl-bar.low i { background: var(--bad); }
+    .countdown.low { color: var(--bad); font-weight: 600; }
+    .item-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+    .empty { padding: 28px 18px; text-align: center; color: var(--text-3); font-size: 13px; }
+    .empty b { display: block; color: var(--text-2); font-weight: 550; margin-bottom: 2px; }
+    .list-foot { padding: 10px 18px; border-top: 1px solid var(--border); }
+    .feed-item { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 12px; padding: 10px 18px; border-bottom: 1px solid var(--border); align-items: start; }
+    .feed-item:last-child { border-bottom: 0; }
+    .feed-item .dot { margin-top: 6px; }
+    .dot.k-lease { background: var(--seg-res); } .dot.k-loan { background: var(--lent); } .dot.k-heal { background: var(--accent); } .dot.k-other { background: var(--text-3); }
+    .feed-text { font-size: 13.5px; }
+    .feed-meta { font-size: 11.5px; color: var(--text-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .feed-time { font-size: 12px; color: var(--text-3); white-space: nowrap; }
+    .area-tag { font-size: 11px; color: var(--text-3); border: 1px solid var(--border); border-radius: 5px; padding: 0 5px; margin-left: 6px; white-space: nowrap; }
+    .link-btn { border: 0; background: none; color: var(--text-3); font-size: 12.5px; padding: 0; text-decoration: none; }
+    .link-btn:hover { color: var(--text); }
+
+    /* ---------- Skeleton & toast ---------- */
+    .skel { background: linear-gradient(90deg, var(--surface-2), var(--border), var(--surface-2)); background-size: 200% 100%; animation: sk 1.2s infinite; border-radius: 6px; }
+    @keyframes sk { to { background-position: -200% 0; } }
+    .toasts { position: fixed; bottom: 16px; right: 16px; left: 16px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 50; pointer-events: none; }
+    .toast { pointer-events: auto; max-width: 380px; width: 100%; padding: 12px 14px; border-radius: 10px; background: var(--text); color: var(--bg); font-size: 13px; box-shadow: 0 10px 30px rgba(0,0,0,.2); animation: tin .2s ease; }
+    .toast.err { background: var(--bad); color: #fff; }
+    .toast b { display: block; }
+    @keyframes tin { from { transform: translateY(8px); opacity: 0; } }
+    @media (max-width: 640px) { .brand span { display: none; } .hide-sm { display: none !important; } .big { font-size: 26px; } }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="logo"><svg class="i" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+        <b>RatePulse</b>
+        <span>Quota trading &amp; adaptive rate limiting</span>
+      </div>
+      <a class="pill" href="#resilience" title="Open Resilience"><span class="dot idle" id="health-dot"></span><span id="health-text">Connecting…</span></a>
+      <button class="pill" id="live-btn" title="Pause or resume auto-refresh"><span class="dot live" id="live-dot"></span><span id="live-text">Live</span></button>
+      <button class="icon-btn" id="theme-btn" title="Toggle theme" aria-label="Toggle theme"><svg class="i" viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg></button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <!-- ============ NAVIGATION ============ -->
+    <nav class="side" aria-label="Sections">
+      <div class="side-label">Start here</div>
+      <a class="nav-link" href="#overview" data-nav="overview">
+        <svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+        Overview
+      </a>
+      <div class="side-label">Features</div>
+      <a class="nav-link" href="#trading" data-nav="trading">
+        <svg class="i" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/></svg>
+        Quota trading <span class="badge" id="nb-trading"></span>
+      </a>
+      <a class="nav-link" href="#limits" data-nav="limits">
+        <svg class="i" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/></svg>
+        Rate limiting <span class="badge" id="nb-limits"></span>
+      </a>
+      <a class="nav-link" href="#resilience" data-nav="resilience">
+        <svg class="i" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Resilience <span class="badge" id="nb-resilience"></span>
+      </a>
+      <div class="side-label">Records</div>
+      <a class="nav-link" href="#audit" data-nav="audit">
+        <svg class="i" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
+        Audit log
+      </a>
+      <div class="side-note">
+        <b>How the parts fit:</b> every org has a <b>quota pool</b>. Orgs can <b>lend</b> it to each other, or <b>lease</b> it to raise their own <b>rate limit</b>. Redis keeps the live numbers; PostgreSQL keeps the record and <b>repairs</b> Redis if they drift.
+      </div>
+    </nav>
+
+    <div class="content">
+      <div class="alerts" id="alerts" style="margin-bottom:20px">
+        <div class="alert-box" id="alert-offline" hidden>
+          <svg class="i" viewBox="0 0 24 24" style="color:var(--warn)"><path d="M12 20h.01M8.5 16.4a5 5 0 0 1 7 0M2 8.8a15 15 0 0 1 20 0M5 12.9a10 10 0 0 1 14 0"/></svg>
+          <div class="grow"><b>Can't reach the server</b><span class="muted">Showing the last known data. Retrying automatically…</span></div>
+        </div>
+        <div class="alert-box" id="alert-desync" hidden>
+          <svg class="i" viewBox="0 0 24 24" style="color:var(--warn)"><path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3Z"/><path d="M12 9v4M12 17h.01"/></svg>
+          <div class="grow"><b>Redis has drifted from PostgreSQL</b><span class="muted" id="desync-text"></span></div>
+          <a class="btn sm" href="#resilience" id="desync-go">Open Resilience</a>
+          <button class="btn sm primary" data-action="reconcile">Reconcile now</button>
+        </div>
+      </div>
+
+      <!-- ================= OVERVIEW ================= -->
+      <section class="view" data-view="overview" aria-labelledby="v-overview">
+        <div class="view-head">
+          <h1 id="v-overview">Overview</h1>
+          <p>The state of both organizations at a glance. Each card below is one feature. Open it to work with that feature.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><h3>Quota pools</h3><p>How much quota each org has, and what it is currently used for.</p></div></div>
+          <div class="pools" data-pools></div>
+        </div>
+
+        <div class="areas">
+          <a class="card area" href="#trading">
+            <div class="area-top"><div class="area-ico ico-trade"><svg class="i" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/></svg></div><h3>Quota trading</h3></div>
+            <p>Orgs lend unused quota to each other. Loans are returned automatically when they expire.</p>
+            <div class="area-stats" id="ov-trading"></div>
+            <span class="area-go">Lend quota →</span>
+          </a>
+          <a class="card area" href="#limits">
+            <div class="area-top"><div class="area-ico ico-limit"><svg class="i" viewBox="0 0 24 24"><path d="m12 14 4-4"/><path d="M3.3 19a10 10 0 1 1 17.4 0"/></svg></div><h3>Rate limiting</h3></div>
+            <p>Every org may send 5 requests per 10s. Leasing quota from its pool raises that limit for a while.</p>
+            <div class="area-stats" id="ov-limits"></div>
+            <span class="area-go">Test the limiter →</span>
+          </a>
+          <a class="card area" href="#resilience">
+            <div class="area-top"><div class="area-ico ico-res" id="ov-res-ico"><svg class="i" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></div><h3>Resilience</h3></div>
+            <p>Redis serves the live counters. PostgreSQL keeps the record and repairs Redis if they disagree.</p>
+            <div class="area-stats" id="ov-res"></div>
+            <span class="area-go">Run a chaos test →</span>
+          </a>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><h3>Latest activity</h3><p>The 6 most recent recorded changes, from all features.</p></div><a class="link-btn" href="#audit">View full audit log →</a></div>
+          <div class="list" id="feed-mini"></div>
+        </div>
+      </section>
+
+      <!-- ================= QUOTA TRADING ================= -->
+      <section class="view" data-view="trading" hidden aria-labelledby="v-trading">
+        <div class="view-head">
+          <h1 id="v-trading">Quota trading</h1>
+          <p>An org with spare quota can lend it to the other org for a fixed time. The lender's pool shrinks, the borrower's grows, and the quota goes back on its own when the loan expires.</p>
+          <div class="relate">
+            <a href="#limits">Borrowed quota can then be <b>leased</b> to raise a rate limit → Rate limiting</a>
+            <a href="#audit">Every loan is recorded → Audit log</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><h3>Quota pools</h3><p>Purple arrows show quota currently on loan.</p></div></div>
+          <div class="pools" data-pools></div>
+        </div>
+
+        <div class="cols">
+          <div class="card">
+            <div class="card-head"><div><h3>Loans</h3><p>Sorted by what expires first.</p></div><span class="tag" id="loans-count">0 active</span></div>
+            <div class="list scroll" id="loans-list"></div>
+          </div>
+
+          <form class="card" id="lend-form" novalidate>
+            <div class="card-head"><div><h3>New loan</h3><p>Move quota from one org to the other.</p></div></div>
+            <div class="card-body stack">
+              <div class="field"><span class="field-label">Direction</span><div class="seg full" id="lend-dir"></div></div>
+              <div class="field">
+                <label class="field-label" for="lend-amount">Amount <span id="lend-avail"></span></label>
+                <input class="input num" id="lend-amount" type="number" min="1" step="1" value="500" inputmode="numeric">
+                <div class="chips" id="lend-amount-chips"></div>
+                <div class="hint" id="lend-amount-hint"></div>
+              </div>
+              <div class="field"><span class="field-label">Duration <span>returned automatically</span></span><div class="chips" id="lend-ttl-chips"></div></div>
+              <div class="summary-box" id="lend-summary"></div>
+              <button class="btn primary block" type="submit" id="lend-submit">Lend quota</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- ================= RATE LIMITING ================= -->
+      <section class="view" data-view="limits" hidden aria-labelledby="v-limits">
+        <div class="view-head">
+          <h1 id="v-limits">Rate limiting</h1>
+          <p>Each org may send <b>5 requests every 10 seconds</b>. To go faster, it <b>leases</b> quota from its own pool: every leased unit adds one request per window until the lease ends.</p>
+          <div class="relate">
+            <a href="#trading">Leases use quota from the pool, so a borrowed pool can lease more → Quota trading</a>
+          </div>
+        </div>
+
+        <div class="limit-tiles" id="limit-tiles"></div>
+
+        <div class="cols">
+          <section class="card" aria-labelledby="sim-h">
+            <div class="card-head">
+              <div><h3 id="sim-h">Rate limit simulator</h3><p>Sends real requests to <span class="mono">POST /api/ping</span> as the chosen org.</p></div>
+              <div class="seg" id="sim-org" role="group" aria-label="Send as"></div>
+            </div>
+            <div class="sim-controls">
+              <button class="btn" id="sim-one"><svg class="i" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>Send 1</button>
+              <button class="btn" id="sim-burst"><svg class="i" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>Burst ×20</button>
+              <button class="btn primary" id="sim-stream"><svg class="i" viewBox="0 0 24 24" id="sim-stream-ico"><path d="m6 3 14 9-14 9V3z"/></svg><span id="sim-stream-text">Start stream</span></button>
+              <label class="muted" style="font-size:13px;display:flex;align-items:center;gap:6px">at
+                <select class="input" id="sim-rps" style="width:auto;height:34px">
+                  <option value="2">2 req/s</option><option value="5" selected>5 req/s</option><option value="10">10 req/s</option><option value="20">20 req/s</option>
+                </select>
+              </label>
+              <span class="spacer"></span>
+              <button class="link-btn" id="sim-reset">Reset stats</button>
+            </div>
+            <div class="sim-body">
+              <div>
+                <div class="window-top">
+                  <span>Current window <span class="faint">(10s)</span></span>
+                  <span class="num"><b id="win-used">0</b> <span class="faint">of</span> <b id="win-limit">–</b> <span class="faint">requests used</span></span>
+                </div>
+                <div class="window-bar"><i id="win-bar" style="width:0%"></i></div>
+              </div>
+              <div class="throttle" id="throttle" hidden>
+                <svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                <span>Limit reached. New requests get <b>429</b>. Window resets in <b class="num" id="throttle-s">0</b>s.</span>
+              </div>
+              <div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:8px;flex-wrap:wrap">
+                  <span style="font-size:13px;font-weight:550">Responses per second</span>
+                  <span class="chart-legend"><span><i style="background:var(--seg-avail)"></i>Allowed (200)</span><span><i style="background:var(--bad)"></i>Throttled (429)</span></span>
+                </div>
+                <div class="chart" id="chart"><div class="chart-empty" id="chart-empty">Send some requests to see the limiter in action</div></div>
+                <div class="chart-axis"><span>60s ago</span><span>30s</span><span>now</span></div>
+              </div>
+              <div class="kpis">
+                <div class="kpi"><span>Sent</span><b class="num" id="k-sent">0</b></div>
+                <div class="kpi ok"><span>Allowed</span><b class="num" id="k-ok">0</b></div>
+                <div class="kpi bad"><span>Throttled</span><b class="num" id="k-bad">0</b></div>
+                <div class="kpi"><span>Avg latency</span><b class="num" id="k-lat">–</b></div>
+              </div>
+              <details class="adv">
+                <summary>Advanced: use a custom API key</summary>
+                <div style="display:flex;gap:6px">
+                  <input class="input mono" id="sim-key" spellcheck="false" autocomplete="off" aria-label="X-API-Key">
+                  <button class="btn" id="copy-key">Copy</button>
+                </div>
+              </details>
+            </div>
+          </section>
+
+          <div class="stack">
+            <form class="card" id="lease-form" novalidate>
+              <div class="card-head"><div><h3>New lease</h3><p>Raise an org's rate limit for a while.</p></div></div>
+              <div class="card-body stack">
+                <div class="field"><span class="field-label">Organization</span><div class="seg full" id="lease-org"></div></div>
+                <div class="field">
+                  <label class="field-label" for="lease-amount">Extra requests per window <span id="lease-avail"></span></label>
+                  <input class="input num" id="lease-amount" type="number" min="1" max="1000" step="1" value="10" inputmode="numeric">
+                  <div class="chips" id="lease-amount-chips"></div>
+                  <div class="hint" id="lease-amount-hint"></div>
+                </div>
+                <div class="field"><span class="field-label">Duration <span>released automatically</span></span><div class="chips" id="lease-ttl-chips"></div></div>
+                <div class="summary-box" id="lease-summary"></div>
+                <button class="btn primary block" type="submit" id="lease-submit">Claim lease</button>
+              </div>
+            </form>
+            <div class="card">
+              <div class="card-head"><div><h3>Leases</h3><p>Active leases add to the limits above.</p></div><span class="tag" id="leases-count">0 active</span></div>
+              <div class="list scroll" id="leases-list"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= RESILIENCE ================= -->
+      <section class="view" data-view="resilience" hidden aria-labelledby="v-res">
+        <div class="view-head">
+          <h1 id="v-res">Resilience</h1>
+          <p>Every change is written to PostgreSQL as an event; Redis keeps the running totals so the limiter can answer in under a millisecond. If Redis ever disagrees with the events, a reconciliation job rebuilds it. This runs every 60s, and you can trigger it here.</p>
+          <div class="relate">
+            <a href="#trading">The numbers being protected are the pools → Quota trading</a>
+            <a href="#audit">Repairs are recorded → Audit log</a>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><div><h3>Data flow</h3><p>Where each number lives, and its current health.</p></div><span class="tag" id="sync-tag">–</span></div>
+          <div class="pipeline">
+            <div class="node" id="node-pg"><b>PostgreSQL</b><span>Event log, the source of truth</span><span id="node-pg-s" class="mono">–</span></div>
+            <div class="pipe-arrow">writes<br>→</div>
+            <div class="node" id="node-redis"><b>Redis</b><span>Live pool counters</span><span id="node-redis-s" class="mono">–</span></div>
+            <div class="pipe-arrow">reads<br>→</div>
+            <div class="node"><b>Rate limiter</b><span>Decides 200 or 429</span><span id="node-env" class="mono">–</span></div>
+          </div>
+        </div>
+
+        <div class="cols even">
+          <div class="card">
+            <div class="card-head"><div><h3>Chaos test</h3><p>Break Redis on purpose, then watch it heal.</p></div></div>
+            <div class="card-body stack">
+              <div class="chaos-step">
+                <div class="n">1</div>
+                <div>
+                  <b style="font-size:13.5px">Corrupt the Redis counter</b>
+                  <p>Removes 1,500 units from Alpha's available quota in Redis only. No event is written, so the two stores now disagree.</p>
+                  <button class="btn sm danger" data-action="desync">Inject drift</button>
+                </div>
+              </div>
+              <div class="chaos-step">
+                <div class="n">2</div>
+                <div>
+                  <b style="font-size:13.5px">Reconcile from the event log</b>
+                  <p>Replays the PostgreSQL events, finds the difference and rewrites Redis.</p>
+                  <button class="btn sm" data-action="reconcile">Run reconciliation</button>
+                </div>
+              </div>
+              <div class="summary-box" id="chaos-status"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h3>Repair history</h3><p>Corrections made by reconciliation.</p></div></div>
+            <div class="list scroll" id="repairs"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= AUDIT LOG ================= -->
+      <section class="view" data-view="audit" hidden aria-labelledby="v-audit">
+        <div class="view-head">
+          <h1 id="v-audit">Audit log</h1>
+          <p>Every change to any pool, read from the immutable <span class="mono">quota_events</span> table in PostgreSQL. Newest first.</p>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <div><h3>Events</h3><p id="feed-count">–</p></div>
+            <div class="seg" id="feed-filter" role="group" aria-label="Filter by feature">
+              <button aria-pressed="true" data-f="ALL">All</button>
+              <button aria-pressed="false" data-f="LOAN">Trading</button>
+              <button aria-pressed="false" data-f="LEASE">Leases</button>
+              <button aria-pressed="false" data-f="RECONCILIATION">Repairs</button>
+            </div>
+          </div>
+          <div class="list" id="feed"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+
+  <script>
+    'use strict';
+    const BASE_LIMIT = 5, WINDOW_S = 10, CHART_S = 60, POLL_MS = 2000;
+    const VIEWS = ['overview', 'trading', 'limits', 'resilience', 'audit'];
+
+    const $ = (id) => document.getElementById(id);
+    const $$ = (sel) => document.querySelectorAll(sel);
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmt = (n) => Number(n || 0).toLocaleString('en-US');
+    const ICON = {
+      loan: '<svg class="i" viewBox="0 0 24 24"><path d="M8 3 4 7l4 4M4 7h16M16 21l4-4-4-4M20 17H4"/></svg>',
+      lease: '<svg class="i" viewBox="0 0 24 24"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/></svg>',
+    };
+
+    const state = {
+      data: null, orgs: [], sig: {}, live: true, online: null, lastOk: 0, pollTimer: null, inflight: false,
+      view: 'overview', feedFilter: 'ALL', showSettledLoans: false, showSettledLeases: false, chaos: '',
+      lend: { from: 0, amount: 500, ttl: 60 },
+      lease: { org: 0, amount: 10, ttl: 60 },
+      sim: { org: 0, sent: 0, ok: 0, bad: 0, latSum: 0, latN: 0, buckets: new Map(), lastLimit: null, lastRemaining: null, windowStart: 0, throttleUntil: 0, streamTimer: null },
+    };
+
+    // ---------- helpers ----------
+    function toast(title, msg, err = false) {
+      const el = document.createElement('div');
+      el.className = 'toast' + (err ? ' err' : '');
+      el.innerHTML = `<b>${esc(title)}</b>${msg ? `<span style="opacity:.85">${esc(msg)}</span>` : ''}`;
+      $('toasts').appendChild(el);
+      setTimeout(() => { el.style.transition = 'opacity .3s'; el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3500);
+    }
+    const short = (name) => String(name || '').replace(/^Organization\s+/i, '');
+    const orgById = (id) => state.orgs.find((o) => o.id === id);
+    const orgLabel = (id) => { const o = orgById(id); return o ? short(o.name) : 'Unknown org'; };
+    const glyph = (o) => { const s = (o?.slug || o?.name || '?').toLowerCase(); return s.startsWith('alpha') ? 'α' : s.startsWith('beta') ? 'β' : s[0].toUpperCase(); };
+    const limitFor = (o) => BASE_LIMIT + (o?.pool?.reserved || 0);
+    const secsLeft = (iso) => iso ? Math.max(0, Math.floor((new Date(iso).getTime() - Date.now()) / 1000)) : 0;
+    function dur(s) {
+      if (s <= 0) return 'expiring…';
+      if (s < 60) return s + 's';
+      if (s < 3600) return Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';
+      return Math.floor(s / 3600) + 'h ' + String(Math.floor((s % 3600) / 60)).padStart(2, '0') + 'm';
+    }
+    const durLabel = (s) => s < 60 ? s + ' seconds' : s < 3600 ? (s / 60) + (s === 60 ? ' minute' : ' minutes') : (s / 3600) + (s === 3600 ? ' hour' : ' hours');
+    function ago(iso) {
+      const s = Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 1000));
+      if (s < 5) return 'just now';
+      if (s < 60) return s + 's ago';
+      if (s < 3600) return Math.floor(s / 60) + 'm ago';
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    async function api(url, opts = {}) {
+      const res = await fetch(url, { headers: opts.body ? { 'Content-Type': 'application/json' } : {}, ...opts });
+      let json = {};
+      try { json = await res.json(); } catch {}
+      if (!res.ok || json.success === false) throw new Error(json.error?.message || json.message || `Request failed (${res.status})`);
+      return json;
+    }
+    function busy(btn, on, label) {
+      if (!btn) return;
+      if (on) { btn.dataset.label = btn.innerHTML; btn.disabled = true; btn.textContent = label || 'Working…'; }
+      else { btn.disabled = false; if (btn.dataset.label) btn.innerHTML = btn.dataset.label; }
+    }
+    function changed(key, value) {
+      const s = JSON.stringify(value);
+      if (state.sig[key] === s) return false;
+      state.sig[key] = s;
+      return true;
+    }
+    const activeLoans = () => (state.data?.loans || []).filter((l) => l.status === 'active');
+    const activeLeases = () => (state.data?.leases || []).filter((l) => l.status === 'active');
+
+    // ---------- routing ----------
+    function route() {
+      const v = location.hash.replace('#', '');
+      state.view = VIEWS.includes(v) ? v : 'overview';
+      $$('[data-view]').forEach((el) => { el.hidden = el.dataset.view !== state.view; });
+      $$('[data-nav]').forEach((a) => { if (a.dataset.nav === state.view) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+      $('desync-go').hidden = state.view === 'resilience';
+      window.scrollTo(0, 0);
+    }
+
+    // ---------- data ----------
+    async function poll() {
+      if (state.inflight) return;
+      state.inflight = true;
+      try {
+        const res = await fetch('/api/dashboard/overview', { cache: 'no-store' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const json = await res.json();
+        if (json.success && json.data) {
+          state.data = json.data;
+          state.orgs = json.data.organizations || [];
+          state.lastOk = Date.now();
+          setOnline(true);
+          render();
+        }
+      } catch { setOnline(false); }
+      finally { state.inflight = false; }
+    }
+    function startPolling() { stopPolling(); state.pollTimer = setInterval(poll, POLL_MS); }
+    function stopPolling() { clearInterval(state.pollTimer); state.pollTimer = null; }
+    function setOnline(ok) {
+      if (state.online === ok) return;
+      state.online = ok;
+      $('alert-offline').hidden = ok;
+      renderLive();
+    }
+
+    function render() {
+      const d = state.data;
+      if (!d) return;
+      renderHealth(d.system, d.desync);
+      if (changed('pools', [state.orgs, activeLoans()])) {
+        $$('[data-pools]').forEach(renderPools);
+        renderSimOrg(); renderLendForm(); renderLeaseForm(); renderLimitTiles();
+      }
+      if (changed('loans', [d.loans, state.showSettledLoans, state.orgs.map((o) => o.id)])) renderLoans();
+      if (changed('leases', [d.leases, state.showSettledLeases])) renderLeases();
+      if (changed('feed', [d.events, state.feedFilter])) { renderFeed(); renderFeedMini(); renderRepairs(); }
+      renderOverviewAreas();
+      renderNavBadges();
+      renderChaosStatus();
+      tick();
+    }
+
+    // ---------- header / health ----------
+    function renderHealth(sys, desync) {
+      if (!sys) return;
+      const pgUp = sys.postgres === 'up', rUp = sys.redis === 'up';
+      const dot = $('health-dot'), txt = $('health-text');
+      if (!pgUp || !rUp) { dot.className = 'dot bad'; txt.textContent = 'Degraded · demo mode'; }
+      else if (desync?.detected) { dot.className = 'dot warn'; txt.textContent = 'Drift detected'; }
+      else { dot.className = 'dot'; txt.textContent = 'All systems operational'; }
+      $('alert-desync').hidden = !desync?.detected;
+      if (desync?.detected) $('desync-text').textContent = ' ' + (desync.details || 'Available quota in Redis does not match the event log.');
+
+      $('node-pg').className = 'node' + (pgUp ? '' : ' bad');
+      $('node-pg-s').textContent = pgUp ? '● up' : '● down';
+      $('node-pg-s').style.color = pgUp ? 'var(--ok)' : 'var(--bad)';
+      $('node-redis').className = 'node' + (!rUp ? ' bad' : desync?.detected ? ' warn' : '');
+      $('node-redis-s').textContent = !rUp ? '● down' : desync?.detected ? '● drifted' : '● up · in sync';
+      $('node-redis-s').style.color = !rUp ? 'var(--bad)' : desync?.detected ? 'var(--warn)' : 'var(--ok)';
+      $('node-env').textContent = 'env: ' + (sys.nodeEnv || 'development');
+      const tag = $('sync-tag');
+      tag.className = 'tag ' + (desync?.detected ? 'warn' : pgUp && rUp ? 'ok' : 'bad');
+      tag.textContent = desync?.detected ? 'Drift detected' : pgUp && rUp ? 'In sync' : 'Degraded';
+    }
+    function renderLive() {
+      const dot = $('live-dot'), txt = $('live-text');
+      if (!state.live) { dot.className = 'dot idle'; txt.textContent = 'Paused'; return; }
+      if (state.online === false) { dot.className = 'dot bad'; txt.textContent = 'Offline'; return; }
+      dot.className = 'dot live';
+      const s = state.lastOk ? Math.floor((Date.now() - state.lastOk) / 1000) : 0;
+      txt.textContent = state.lastOk && s >= 3 ? `Live · ${s}s ago` : 'Live';
+    }
+    function renderNavBadges() {
+      const nl = activeLoans().length, ns = activeLeases().length;
+      $('nb-trading').textContent = nl ? `${nl} active` : '';
+      $('nb-limits').innerHTML = state.sim.streamTimer ? '<span class="dot live"></span> streaming' : ns ? `${ns} lease${ns > 1 ? 's' : ''}` : '';
+      $('nb-resilience').innerHTML = state.data?.desync?.detected ? '<span class="dot warn"></span>' : '';
+    }
+
+    // ---------- overview ----------
+    function renderOverviewAreas() {
+      const loans = activeLoans(), leases = activeLeases();
+      const lent = loans.reduce((s, l) => s + (l.amount || 0), 0);
+      const soonest = loans.map((l) => secsLeft(l.expiresAt)).sort((a, b) => a - b)[0];
+      $('ov-trading').innerHTML = `
+        <div><span class="faint">Active loans</span><span class="num">${loans.length}</span></div>
+        <div><span class="faint">Quota on loan</span><span class="num">${fmt(lent)}</span></div>
+        <div><span class="faint">Next return</span><span class="num">${soonest != null ? 'in ' + dur(soonest) : '—'}</span></div>`;
+      $('ov-limits').innerHTML = state.orgs.slice(0, 2).map((o) => `<div><span class="faint">${esc(short(o.name))} limit</span><span class="num">${limitFor(o)} req / ${WINDOW_S}s</span></div>`).join('') +
+        `<div><span class="faint">Active leases</span><span class="num">${leases.length}</span></div>`;
+      const d = state.data?.desync, sys = state.data?.system || {};
+      const ok = sys.postgres === 'up' && sys.redis === 'up';
+      $('ov-res-ico').className = 'area-ico ico-res' + (d?.detected || !ok ? ' warn' : '');
+      const repairs = (state.data?.events || []).filter((e) => (e.eventType || '').includes('RECONCILIATION'));
+      $('ov-res').innerHTML = `
+        <div><span class="faint">Redis vs PostgreSQL</span><span style="color:${d?.detected ? 'var(--warn)' : 'var(--ok)'}">${d?.detected ? 'Drift detected' : 'In sync'}</span></div>
+        <div><span class="faint">Services</span><span>${ok ? 'All up' : 'Degraded'}</span></div>
+        <div><span class="faint">Last repair</span><span>${repairs[0] ? ago(repairs[0].createdAt) : '—'}</span></div>`;
+    }
+
+    // ---------- pools (rendered on Overview and Quota trading) ----------
+    function orgCardHtml(o) {
+      if (!o) return '<div class="org-card"><div class="empty">No organization</div></div>';
+      const p = o.pool || {};
+      const capacity = Math.max(1, (p.total || 0) + (p.received || 0));
+      const pct = (v) => Math.max(0, Math.min(100, (v / capacity) * 100));
+      return `<div class="org-card">
+        <div class="org-top">
+          <div class="org-badge">${glyph(o)}</div>
+          <div style="min-width:0">
+            <div class="org-name">${esc(o.name)}</div>
+            <div style="display:flex;gap:6px;margin-top:3px;flex-wrap:wrap">
+              <span class="tag" title="${o.failOpen ? 'If Redis is down, requests are allowed' : 'If Redis is down, requests are rejected'}">${o.failOpen ? 'Fail-open' : 'Fail-closed'}</span>
+              ${p.received ? `<span class="tag lent">+${fmt(p.received)} borrowed</span>` : ''}
+            </div>
+          </div>
+        </div>
+        <div class="big num">${fmt(p.available)} <small>available of ${fmt(p.total)}</small></div>
+        <div class="bar" role="img" aria-label="Available ${fmt(p.available)}, leased ${fmt(p.reserved)}, lent ${fmt(p.loanedOut)}">
+          <i class="s-avail" style="width:${pct(p.available)}%"></i><i class="s-res" style="width:${pct(p.reserved)}%"></i><i class="s-lent" style="width:${pct(p.loanedOut)}%"></i>
+        </div>
+        <div class="legend">
+          <div><i style="background:var(--seg-avail)"></i>Available<b class="num">${fmt(p.available)}</b></div>
+          <div><i style="background:var(--seg-res)"></i>Leased<b class="num">${fmt(p.reserved)}</b></div>
+          <div><i style="background:var(--seg-lent)"></i>Lent out<b class="num">${fmt(p.loanedOut)}</b></div>
+        </div>
+      </div>`;
+    }
+    function flowHtml() {
+      const a = state.orgs[0], b = state.orgs[1];
+      const loans = activeLoans();
+      const by = (from) => loans.filter((l) => l.lenderOrgId === from?.id);
+      const lane = (from, to, dir) => {
+        const ls = by(from), sum = ls.reduce((s, l) => s + (l.amount || 0), 0);
+        const label = ls.length ? `${ls.length} loan${ls.length > 1 ? 's' : ''} to ${esc(short(to?.name))}` : 'no loans';
+        const amount = `<b class="num">${sum ? fmt(sum) : '—'}</b>`;
+        return `<div class="flow-lane ${sum ? 'active' : ''}">${dir === 'r' ? amount : `<span>${label}</span>`}<div class="arrow ${dir}"></div>${dir === 'r' ? `<span>${label}</span>` : amount}</div>`;
+      };
+      return `<div class="flow">${lane(a, b, 'r')}${lane(b, a, 'l')}</div>`;
+    }
+    function renderPools(el) { el.innerHTML = orgCardHtml(state.orgs[0]) + flowHtml() + orgCardHtml(state.orgs[1]); }
+
+    // ---------- trading ----------
+    const TTLS = [[30, '30s'], [60, '1m'], [300, '5m'], [3600, '1h']];
+    function chips(id, items, current, attr) {
+      $(id).innerHTML = items.map(([v, l]) => `<button type="button" class="chip" data-${attr}="${v}" aria-pressed="${v === current}">${l}</button>`).join('');
+    }
+    function renderLendForm() {
+      const from = state.orgs[state.lend.from], to = state.orgs[1 - state.lend.from];
+      if (!from || !to) return;
+      $('lend-dir').innerHTML = [0, 1].map((i) => `<button type="button" data-dir="${i}" aria-pressed="${state.lend.from === i}">${esc(short(state.orgs[i].name))} → ${esc(short(state.orgs[1 - i].name))}</button>`).join('');
+      chips('lend-amount-chips', [100, 500, 1000, 2000].map((v) => [v, fmt(v)]), state.lend.amount, 'lamt');
+      chips('lend-ttl-chips', TTLS, state.lend.ttl, 'lttl');
+      const avail = from.pool?.available || 0, amt = state.lend.amount;
+      $('lend-avail').textContent = `${short(from.name)} has ${fmt(avail)}`;
+      const bad = !Number.isInteger(amt) || amt <= 0 ? 'Enter a whole number above 0.' : amt > avail ? `${short(from.name)} only has ${fmt(avail)} available.` : '';
+      $('lend-amount').classList.toggle('invalid', !!bad);
+      $('lend-amount-hint').className = 'hint' + (bad ? ' bad' : '');
+      $('lend-amount-hint').textContent = bad;
+      $('lend-submit').disabled = !!bad;
+      $('lend-submit').textContent = bad ? 'Lend quota' : `Lend ${fmt(amt)} to ${short(to.name)}`;
+      $('lend-summary').innerHTML = bad ? 'Choose an amount to see the effect.' :
+        `<b>${esc(short(from.name))}</b>: ${fmt(avail)} → ${fmt(avail - amt)} available<br><b>${esc(short(to.name))}</b>: ${fmt(to.pool?.available)} → ${fmt((to.pool?.available || 0) + amt)} available<br><span class="faint">Returned to ${esc(short(from.name))} after ${durLabel(state.lend.ttl)}.</span>`;
+    }
+    function contractRow(x) {
+      const isLoan = x.kind === 'loan', active = x.status === 'active';
+      const title = isLoan ? `${esc(orgLabel(x.lenderOrgId))} → ${esc(orgLabel(x.borrowerOrgId))} · ${fmt(x.amount)} units` : `${esc(orgLabel(x.orgId))} · +${fmt(x.amount)} req / ${WINDOW_S}s`;
+      const total = Math.max(1, (new Date(x.expiresAt) - new Date(x.start)) / 1000);
+      const actions = !active ? `<span class="tag">${esc(x.status)}</span>` :
+        isLoan ? `<button class="btn sm" data-repay="${esc(x.id)}" title="Borrower gives the quota back now">Repay</button><button class="btn sm danger" data-cancel="${esc(x.id)}" title="Lender takes the quota back now">Recall</button>`
+               : `<button class="btn sm" data-release="${esc(x.id)}">Release</button>`;
+      const sub = active
+        ? `<span class="ttl-bar" data-ttl-bar data-exp="${esc(x.expiresAt)}" data-total="${total}"><i></i></span><span class="countdown num" data-exp="${esc(x.expiresAt)}"></span>`
+        : `<span>${ago(x.settledAt || x.releasedAt || x.start)}</span>`;
+      return `<div class="item${active ? '' : ' settled'}">
+        <div class="item-icon ${x.kind}">${ICON[x.kind]}</div>
+        <div style="min-width:0"><div class="item-title">${title}</div><div class="item-sub">${sub}</div></div>
+        <div class="item-actions">${actions}</div></div>`;
+    }
+    function renderContractList(el, items, showSettled, toggleAttr, emptyHtml) {
+      const active = items.filter((x) => x.status === 'active').sort((a, b) => new Date(a.expiresAt) - new Date(b.expiresAt));
+      const settled = items.filter((x) => x.status !== 'active').sort((a, b) => new Date(b.settledAt || b.releasedAt || b.start) - new Date(a.settledAt || a.releasedAt || a.start)).slice(0, 10);
+      let html = active.length ? active.map(contractRow).join('') : emptyHtml;
+      if (settled.length) {
+        if (showSettled) html += settled.map(contractRow).join('');
+        html += `<div class="list-foot"><button class="link-btn" ${toggleAttr}>${showSettled ? 'Hide' : 'Show'} recently ended (${settled.length})</button></div>`;
+      }
+      el.innerHTML = html;
+      return active.length;
+    }
+    function renderLoans() {
+      const items = (state.data.loans || []).map((l) => ({ kind: 'loan', ...l, start: l.createdAt }));
+      const n = renderContractList($('loans-list'), items, state.showSettledLoans, 'data-toggle-loans',
+        '<div class="empty"><b>No active loans</b>Create one with the form on the right.</div>');
+      $('loans-count').textContent = `${n} active`;
+    }
+    function renderLeases() {
+      const items = (state.data.leases || []).map((l) => ({ kind: 'lease', ...l, start: l.claimedAt }));
+      const n = renderContractList($('leases-list'), items, state.showSettledLeases, 'data-toggle-leases',
+        '<div class="empty"><b>No active leases</b>Both orgs are on the base limit.</div>');
+      $('leases-count').textContent = `${n} active`;
+    }
+
+    // ---------- rate limiting ----------
+    function renderLimitTiles() {
+      $('limit-tiles').innerHTML = state.orgs.slice(0, 2).map((o) => {
+        const r = o.pool?.reserved || 0;
+        return `<div class="card limit-tile">
+          <div class="org-top"><div class="org-badge">${glyph(o)}</div><div><div class="org-name">${esc(o.name)}</div><div class="faint" style="font-size:12.5px">${fmt(o.pool?.available)} quota available to lease</div></div></div>
+          <div class="limit-eq"><span><b>${BASE_LIMIT}</b> base</span><span>+</span><span><b>${fmt(r)}</b> leased</span><span>=</span><span class="total num">${limitFor(o)}</span><span>req / ${WINDOW_S}s</span></div>
+        </div>`;
+      }).join('');
+    }
+    function renderLeaseForm() {
+      const o = state.orgs[state.lease.org];
+      if (!o) return;
+      $('lease-org').innerHTML = state.orgs.slice(0, 2).map((x, i) => `<button type="button" data-lorg="${i}" aria-pressed="${state.lease.org === i}">${esc(short(x.name))}</button>`).join('');
+      chips('lease-amount-chips', [10, 50, 100].map((v) => [v, '+' + v]), state.lease.amount, 'samt');
+      chips('lease-ttl-chips', [[30, '30s'], [60, '1m'], [300, '5m'], [600, '10m']], state.lease.ttl, 'sttl');
+      const amt = state.lease.amount, avail = o.pool?.available || 0;
+      $('lease-avail').textContent = `pool has ${fmt(avail)}`;
+      const bad = !Number.isInteger(amt) || amt <= 0 || amt > 1000 ? 'Enter a whole number between 1 and 1,000.' : amt > avail ? `${short(o.name)} only has ${fmt(avail)} available.` : '';
+      $('lease-amount').classList.toggle('invalid', !!bad);
+      $('lease-amount-hint').className = 'hint' + (bad ? ' bad' : '');
+      $('lease-amount-hint').textContent = bad;
+      $('lease-submit').disabled = !!bad;
+      const now = limitFor(o);
+      $('lease-summary').innerHTML = bad ? 'Choose an amount to see the effect.' :
+        `<b>${esc(short(o.name))}</b>'s limit: <b>${now}</b> → <b>${now + amt}</b> req / ${WINDOW_S}s for ${durLabel(state.lease.ttl)}.<br><span class="faint">${fmt(amt)} units are held from its pool meanwhile.</span>`;
+    }
+    function renderSimOrg() {
+      $('sim-org').innerHTML = state.orgs.slice(0, 2).map((o, i) => `<button type="button" data-sorg="${i}" aria-pressed="${state.sim.org === i}">${esc(short(o.name))}</button>`).join('');
+      const o = state.orgs[state.sim.org], key = $('sim-key');
+      if (o && (!key.value || key.dataset.auto !== '0')) { key.value = o.apiKey || ''; key.dataset.auto = '1'; }
+      renderWindow();
+    }
+    function renderWindow() {
+      const o = state.orgs[state.sim.org];
+      const limit = state.sim.lastLimit ?? limitFor(o);
+      const inWindow = Date.now() - state.sim.windowStart < WINDOW_S * 1000;
+      let used = inWindow && state.sim.lastRemaining != null ? Math.max(0, limit - state.sim.lastRemaining) : 0;
+      if (Date.now() < state.sim.throttleUntil) used = limit;
+      $('win-used').textContent = used;
+      $('win-limit').textContent = limit;
+      const pct = Math.min(100, (used / Math.max(1, limit)) * 100);
+      $('win-bar').style.width = pct + '%';
+      $('win-bar').style.background = pct >= 100 ? 'var(--bad)' : pct >= 70 ? 'var(--warn)' : 'var(--accent)';
+    }
+    function bucket(kind) {
+      const s = Math.floor(Date.now() / 1000);
+      const b = state.sim.buckets.get(s) || { ok: 0, bad: 0 };
+      b[kind]++;
+      state.sim.buckets.set(s, b);
+    }
+    function renderChart() {
+      const now = Math.floor(Date.now() / 1000);
+      for (const k of state.sim.buckets.keys()) if (k <= now - CHART_S) state.sim.buckets.delete(k);
+      let max = 5;
+      const cols = [];
+      for (let s = now - CHART_S + 1; s <= now; s++) { const b = state.sim.buckets.get(s) || { ok: 0, bad: 0 }; max = Math.max(max, b.ok + b.bad); cols.push(b); }
+      const chart = $('chart');
+      if (!chart.querySelector('.col')) chart.insertAdjacentHTML('beforeend', cols.map(() => '<div class="col"><i class="c-ok"></i><i class="c-bad"></i></div>').join(''));
+      chart.querySelectorAll('.col').forEach((c, i) => {
+        c.children[0].style.height = (cols[i].ok / max) * 100 + '%';
+        c.children[1].style.height = (cols[i].bad / max) * 100 + '%';
+        c.title = `${cols[i].ok} allowed, ${cols[i].bad} throttled`;
+      });
+      $('chart-empty').hidden = state.sim.buckets.size > 0;
+    }
+    function renderKpis() {
+      const s = state.sim;
+      $('k-sent').textContent = fmt(s.sent); $('k-ok').textContent = fmt(s.ok); $('k-bad').textContent = fmt(s.bad);
+      $('k-lat').textContent = s.latN ? Math.round(s.latSum / s.latN) + ' ms' : '–';
+    }
+    function renderThrottle() {
+      const left = Math.ceil((state.sim.throttleUntil - Date.now()) / 1000);
+      $('throttle').hidden = left <= 0;
+      if (left > 0) $('throttle-s').textContent = left;
+    }
+    async function ping() {
+      const key = $('sim-key').value.trim();
+      const t0 = performance.now();
+      state.sim.sent++;
+      try {
+        const opts = { method: 'POST', headers: { 'X-API-Key': key } };
+        let res = await fetch('/api/ping', opts);
+        if (res.status === 500 || res.status === 404) res = await fetch('/api/dashboard/ping-proxy', opts);
+        const lat = performance.now() - t0;
+        const lim = parseInt(res.headers.get('X-RateLimit-Limit'), 10);
+        const rem = parseInt(res.headers.get('X-RateLimit-Remaining'), 10);
+        if (!Number.isNaN(lim)) state.sim.lastLimit = lim;
+        if (!Number.isNaN(rem)) {
+          if (state.sim.lastRemaining == null || Date.now() - state.sim.windowStart > WINDOW_S * 1000 || rem > state.sim.lastRemaining) state.sim.windowStart = Date.now();
+          state.sim.lastRemaining = rem;
+        }
+        if (res.status === 429) {
+          state.sim.bad++; bucket('bad');
+          const ra = parseInt(res.headers.get('Retry-After'), 10);
+          state.sim.throttleUntil = Date.now() + (Number.isNaN(ra) ? WINDOW_S : ra) * 1000;
+        } else if (res.ok) { state.sim.ok++; bucket('ok'); state.sim.latSum += lat; state.sim.latN++; }
+        else { state.sim.bad++; bucket('bad'); }
+      } catch { state.sim.bad++; bucket('bad'); }
+      renderKpis(); renderChart(); renderWindow(); renderThrottle();
+    }
+    function setStream(on) {
+      clearInterval(state.sim.streamTimer); state.sim.streamTimer = null;
+      if (on) {
+        const rps = parseInt($('sim-rps').value, 10) || 5;
+        state.sim.streamTimer = setInterval(ping, Math.max(40, Math.floor(1000 / rps)));
+        $('sim-stream').className = 'btn on';
+        $('sim-stream-text').textContent = 'Stop stream';
+        $('sim-stream-ico').innerHTML = '<rect x="6" y="6" width="12" height="12" rx="1"/>';
+      } else {
+        $('sim-stream').className = 'btn primary';
+        $('sim-stream-text').textContent = 'Start stream';
+        $('sim-stream-ico').innerHTML = '<path d="m6 3 14 9-14 9V3z"/>';
+      }
+      renderNavBadges();
+    }
+
+    // ---------- activity / audit ----------
+    function describe(e) {
+      const who = `<b>${esc(orgLabel(e.orgId))}</b>`, other = `<b>${esc(orgLabel(e.counterpartOrgId))}</b>`, n = `<b>${fmt(e.amount)}</b>`;
+      switch (e.eventType) {
+        case 'LOAN_CREATE': return [`${who} lent ${n} to ${other}`, 'loan', 'Trading'];
+        case 'LOAN_REPAY': return [`Loan of ${n} repaid to ${who}`, 'loan', 'Trading'];
+        case 'LOAN_CANCEL': return [`${who} recalled a loan of ${n}`, 'loan', 'Trading'];
+        case 'LOAN_EXPIRE': return [`Loan of ${n} expired and went back to ${who}`, 'loan', 'Trading'];
+        case 'LEASE_CLAIM': return [`${who} leased +${n} requests per window`, 'lease', 'Rate limit'];
+        case 'LEASE_RELEASE': return [`${who} released a lease of ${n}`, 'lease', 'Rate limit'];
+        case 'LEASE_EXPIRE': return [`${who}'s lease of ${n} expired`, 'lease', 'Rate limit'];
+        case 'LEASE_CLAIM_FAILED': return [`${who} failed to lease ${n}`, 'lease', 'Rate limit'];
+        case 'RECONCILIATION_CORRECTION': return [`Reconciliation corrected ${who}'s Redis counters`, 'heal', 'Resilience'];
+        default: return [`${esc(e.eventType)} · ${who} · ${n}`, 'other', 'Other'];
+      }
+    }
+    function feedHtml(events, withMeta) {
+      return events.map((e) => {
+        const [text, kind, area] = describe(e);
+        const meta = withMeta ? [e.balanceAfter != null ? `balance after: ${fmt(e.balanceAfter)}` : '', e.idempotencyKey ? `key: ${e.idempotencyKey}` : ''].filter(Boolean).join(' · ') : '';
+        return `<div class="feed-item"><span class="dot k-${kind}"></span>
+          <div style="min-width:0"><div class="feed-text">${text}<span class="area-tag">${area}</span></div>${meta ? `<div class="feed-meta mono" title="${esc(meta)}">${esc(meta)}</div>` : ''}</div>
+          <span class="feed-time" data-ago="${esc(e.createdAt)}" title="${esc(new Date(e.createdAt).toLocaleString())}">${ago(e.createdAt)}</span></div>`;
+      }).join('');
+    }
+    function renderFeed() {
+      const f = state.feedFilter, all = state.data.events || [];
+      const events = all.filter((e) => f === 'ALL' || (e.eventType || '').includes(f));
+      $('feed-count').textContent = `${events.length} event${events.length === 1 ? '' : 's'}${f === 'ALL' ? '' : ' in this feature'} · latest 50 loaded`;
+      $('feed').innerHTML = events.length ? feedHtml(events, true) :
+        `<div class="empty"><b>${f === 'ALL' ? 'No events yet' : 'No events for this feature'}</b>Lend, lease or run a chaos test, and it will appear here.</div>`;
+    }
+    function renderFeedMini() {
+      const events = (state.data.events || []).slice(0, 6);
+      $('feed-mini').innerHTML = events.length ? feedHtml(events, false) : '<div class="empty"><b>No activity yet</b>Pick a feature above to get started.</div>';
+    }
+    function renderRepairs() {
+      const events = (state.data.events || []).filter((e) => (e.eventType || '').includes('RECONCILIATION'));
+      $('repairs').innerHTML = events.length ? feedHtml(events, true) : '<div class="empty"><b>No repairs yet</b>Inject drift, then reconcile, to see one here.</div>';
+    }
+
+    // ---------- resilience ----------
+    function renderChaosStatus() {
+      const d = state.data?.desync;
+      $('chaos-status').innerHTML = d?.detected
+        ? `<span style="color:var(--warn)">● Drift present.</span> ${esc(d.details || '')}<br><span class="faint">Next: run step 2.</span>`
+        : `<span style="color:var(--ok)">● In sync.</span> Redis matches the PostgreSQL event log.${state.chaos ? '<br><span class="faint">' + esc(state.chaos) + '</span>' : ''}`;
+    }
+
+    // ---------- 1s ticker ----------
+    function tick() {
+      $$('.countdown[data-exp]').forEach((el) => { const s = secsLeft(el.dataset.exp); el.textContent = dur(s) + (s > 0 ? ' left' : ''); el.classList.toggle('low', s <= 15); });
+      $$('[data-ttl-bar]').forEach((el) => {
+        const s = secsLeft(el.dataset.exp), total = parseFloat(el.dataset.total) || 1;
+        el.firstElementChild.style.width = Math.max(0, Math.min(100, (s / total) * 100)) + '%';
+        el.classList.toggle('low', s <= 15);
+      });
+      $$('[data-ago]').forEach((el) => { el.textContent = ago(el.dataset.ago); });
+    }
+
+    // ---------- actions ----------
+    async function createLoan(e) {
+      e.preventDefault();
+      const from = state.orgs[state.lend.from], to = state.orgs[1 - state.lend.from];
+      if (!from || !to) return;
+      const btn = $('lend-submit');
+      busy(btn, true, 'Lending…');
+      try {
+        await api('/api/dashboard/loans', { method: 'POST', body: JSON.stringify({ lenderOrgId: from.id, borrowerOrgId: to.id, amount: state.lend.amount, ttlSeconds: state.lend.ttl, note: 'Dashboard transfer' }) });
+        toast('Loan created', `${short(from.name)} lent ${fmt(state.lend.amount)} to ${short(to.name)} for ${durLabel(state.lend.ttl)}.`);
+        await poll();
+      } catch (err) { toast("Couldn't create loan", err.message, true); }
+      finally { busy(btn, false); renderLendForm(); }
+    }
+    async function claimLease(e) {
+      e.preventDefault();
+      const o = state.orgs[state.lease.org];
+      if (!o) return;
+      const { amount, ttl } = state.lease, btn = $('lease-submit');
+      busy(btn, true, 'Claiming…');
+      try {
+        await api('/api/dashboard/leases', { method: 'POST', body: JSON.stringify({ orgId: o.id, amount, ttlSeconds: ttl }) });
+        toast('Lease active', `${short(o.name)} can now send ${limitFor(o) + amount} req / ${WINDOW_S}s for ${durLabel(ttl)}.`);
+        await poll();
+      } catch (err) { toast("Couldn't claim lease", err.message, true); }
+      finally { busy(btn, false); renderLeaseForm(); }
+    }
+    async function act(url, method, okTitle, okMsg, errTitle, btn) {
+      busy(btn, true);
+      try { await api(url, { method }); toast(okTitle, okMsg); await poll(); }
+      catch (err) { toast(errTitle, err.message, true); busy(btn, false); }
+    }
+    async function desync(btn) {
+      busy(btn, true, 'Injecting…');
+      try { await api('/api/dashboard/chaos/desync', { method: 'POST' }); state.chaos = ''; toast('Drift injected', 'Redis no longer matches the event log.'); await poll(); }
+      catch (err) { toast('Chaos action failed', err.message, true); }
+      finally { busy(btn, false); }
+    }
+    async function reconcile(btn) {
+      busy(btn, true, 'Reconciling…');
+      try {
+        const r = await api('/api/dashboard/chaos/reconcile', { method: 'POST' });
+        state.chaos = `Last repair ${new Date().toLocaleTimeString()}${r.correctedCount ? ` · ${r.correctedCount} counter(s) fixed` : ''}.`;
+        toast('Reconciled', 'Redis was rebuilt from the PostgreSQL event log.');
+        await poll();
+      } catch (err) { toast('Reconciliation failed', err.message, true); }
+      finally { busy(btn, false); }
+    }
+
+    // ---------- wiring ----------
+    document.addEventListener('click', (e) => {
+      const t = e.target.closest('button');
+      if (!t) return;
+      const ds = t.dataset;
+      if (ds.dir) { state.lend.from = +ds.dir; renderLendForm(); }
+      else if (ds.lamt) { state.lend.amount = +ds.lamt; $('lend-amount').value = ds.lamt; renderLendForm(); }
+      else if (ds.lttl) { state.lend.ttl = +ds.lttl; renderLendForm(); }
+      else if (ds.lorg) { state.lease.org = +ds.lorg; renderLeaseForm(); }
+      else if (ds.samt) { state.lease.amount = +ds.samt; $('lease-amount').value = ds.samt; renderLeaseForm(); }
+      else if (ds.sttl) { state.lease.ttl = +ds.sttl; renderLeaseForm(); }
+      else if (ds.sorg) { state.sim.org = +ds.sorg; state.sim.lastLimit = null; state.sim.lastRemaining = null; $('sim-key').dataset.auto = '1'; $('sim-key').value = ''; renderSimOrg(); }
+      else if (ds.repay) act(`/api/dashboard/loans/${ds.repay}/repay`, 'POST', 'Loan repaid', 'Quota returned to the lender.', "Couldn't repay", t);
+      else if (ds.cancel) act(`/api/dashboard/loans/${ds.cancel}/cancel`, 'POST', 'Loan recalled', 'The lender took the quota back.', "Couldn't recall", t);
+      else if (ds.release) act(`/api/dashboard/leases/${ds.release}`, 'DELETE', 'Lease released', 'Quota returned to the pool.', "Couldn't release", t);
+      else if (ds.action === 'desync') desync(t);
+      else if (ds.action === 'reconcile') reconcile(t);
+      else if ('toggleLoans' in ds) { state.showSettledLoans = !state.showSettledLoans; render(); }
+      else if ('toggleLeases' in ds) { state.showSettledLeases = !state.showSettledLeases; render(); }
+      else if (ds.f) { state.feedFilter = ds.f; $$('#feed-filter button').forEach((b) => b.setAttribute('aria-pressed', String(b === t))); render(); }
+    });
+    $('lend-amount').addEventListener('input', (e) => { state.lend.amount = Number(e.target.value); renderLendForm(); });
+    $('lease-amount').addEventListener('input', (e) => { state.lease.amount = Number(e.target.value); renderLeaseForm(); });
+    $('lend-form').addEventListener('submit', createLoan);
+    $('lease-form').addEventListener('submit', claimLease);
+    $('sim-key').addEventListener('input', (e) => { e.target.dataset.auto = '0'; });
+    $('copy-key').addEventListener('click', async () => { try { await navigator.clipboard.writeText($('sim-key').value); toast('API key copied'); } catch { toast("Couldn't copy", 'Clipboard is not available here.', true); } });
+    $('sim-one').addEventListener('click', ping);
+    $('sim-burst').addEventListener('click', async (e) => {
+      const btn = e.currentTarget; busy(btn, true, 'Sending…');
+      await Promise.all(Array.from({ length: 20 }, (_, i) => new Promise((r) => setTimeout(() => ping().then(r), i * 30))));
+      busy(btn, false);
+    });
+    $('sim-stream').addEventListener('click', () => setStream(!state.sim.streamTimer));
+    $('sim-rps').addEventListener('change', () => { if (state.sim.streamTimer) setStream(true); });
+    $('sim-reset').addEventListener('click', () => {
+      Object.assign(state.sim, { sent: 0, ok: 0, bad: 0, latSum: 0, latN: 0, throttleUntil: 0 });
+      state.sim.buckets.clear(); renderKpis(); renderChart(); renderThrottle();
+    });
+    $('live-btn').addEventListener('click', () => { state.live = !state.live; if (state.live) { poll(); startPolling(); } else stopPolling(); renderLive(); });
+    $('theme-btn').addEventListener('click', () => {
+      const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      const next = cur === 'dark' ? 'light' : 'dark';
+      document.documentElement.dataset.theme = next;
+      try { localStorage.setItem('ratepulse-theme', next); } catch {}
+    });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && state.live) poll(); });
+    window.addEventListener('hashchange', route);
+
+    // ---------- boot ----------
+    try { const t = localStorage.getItem('ratepulse-theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+    const skel = '<div class="org-card"><div class="skel" style="height:34px;width:60%"></div><div class="skel" style="height:34px;width:80%"></div><div class="skel" style="height:10px"></div><div class="skel" style="height:40px"></div></div>';
+    $$('[data-pools]').forEach((el) => { el.innerHTML = skel + '<div></div>' + skel; });
+    ['loans-list', 'leases-list', 'feed', 'feed-mini', 'repairs'].forEach((id) => { $(id).innerHTML = '<div class="empty">Loading…</div>'; });
+    route(); renderChart(); renderKpis();
+    setInterval(() => { tick(); renderLive(); renderThrottle(); renderChart(); renderNavBadges(); if (state.data) renderOverviewAreas(); if (state.sim.lastRemaining != null) renderWindow(); }, 1000);
+    poll().then(startPolling);
+  </script>
+</body>
+</html>

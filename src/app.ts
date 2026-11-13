@@ -1,8 +1,10 @@
 import fastify, { FastifyInstance } from 'fastify';
+import { swaggerPlugin } from './plugins/swagger';
 import { authPlugin } from './plugins/auth';
 import { metricsPlugin } from './plugins/metrics';
 import { luaScriptsPlugin } from './plugins/lua-scripts';
 import { rateLimitPlugin } from './plugins/rate-limit';
+import { dashboardPlugin } from './plugins/dashboard';
 import systemRoutes from './routes/system';
 import devBootstrapRoutes from './routes/dev/bootstrap';
 import orgsRoutes from './routes/orgs';
@@ -25,10 +27,12 @@ export function buildApp(opts = {}): FastifyInstance {
   });
 
   // Register Plugins
+  app.register(swaggerPlugin);
   app.register(metricsPlugin);
   app.register(luaScriptsPlugin);
   app.register(authPlugin);
   app.register(rateLimitPlugin);
+  app.register(dashboardPlugin);
 
   // Register Routes
   app.register(systemRoutes);
