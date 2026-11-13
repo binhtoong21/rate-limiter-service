@@ -189,10 +189,11 @@ export class QuotaService {
   async releaseLease(params: {
     leaseId: string;
     serviceId: string;
+    metadata?: Record<string, unknown>;
   }): Promise<typeof leases.$inferSelect> {
     const timer = quotaOperationDuration.startTimer({ type: 'release_lease' });
     try {
-      const { leaseId, serviceId } = params;
+      const { leaseId, serviceId, metadata } = params;
 
     // Step 1: Query existing lease
     const [existingLease] = await db
@@ -244,6 +245,7 @@ export class QuotaService {
         leaseId,
         amount: existingLease.amount,
         balanceAfter,
+        metadata: metadata ?? {},
       });
 
       // 3B: Redis Lua
