@@ -10,14 +10,27 @@ import { redis } from '../redis';
 import { AuthService } from '../services/auth.service';
 import { LoanService } from '../services/loan.service';
 import { QuotaService } from '../services/quota.service';
-import { eq, desc, and, or, sql } from 'drizzle-orm';
+import { eq, desc, and, or, sql, inArray } from 'drizzle-orm';
 import { PING_BASE_LIMIT, PING_WINDOW_MS } from '../config/rate-limits';
 import { chaosAllowed, startRedisOutage, stopRedisOutage, redisOutageEndsAt } from '../chaos/redis-outage';
 import { reconcileOrg } from '../services/reconciliation.service';
+import { demoEnabled } from '../config/demo';
+import { deficitSince, DEFICIT_GRACE_MS } from '../services/deficit.service';
 
 
 
 export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
+  // The dashboard API is a demo: no API-key auth, seeds admin orgs with well-known keys.
+  fastify.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/api/dashboard/') || demoEnabled()) return;
+    return reply.status(403).send({
+      success: false,
+      error: {
+        code: 'DASHBOARD_DEMO_DISABLED',
+        message: 'The demo dashboard API is disabled in production. Set DASHBOARD_DEMO=true only on a private deployment.',
+      },
+    });
+  });
   const publicDir = path.join(process.cwd(), 'public');
   if (!fs.existsSync(publicDir)) {
     fs.mkdirSync(publicDir, { recursive: true });
@@ -291,7 +304,11 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
               desyncDetails = `Leased quota (${reserved}) does not match the lease sum used by the rate limiter (${activeLeaseSum}) for org ${orgId}`;
             }
 
-            return { total, reserved, loanedOut, received, available, activeLeaseSum };
+            return {
+              total, reserved, loanedOut, received, available, activeLeaseSum,
+              deficitSince: await deficitSince(orgId),
+              deficitGraceMs: DEFICIT_GRACE_MS,
+            };
           };
 
           const alphaPool = await readPool(alpha.id, alpha.quotaAllocated);
@@ -360,12 +377,29 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
             releasedAt: ls.releasedAt,
           }));
 
-          // Read recent events
-          const dbEvents = await db
+          // Read recent events. A loan action writes one event per org; keep only the actor's event
+          // (lender for create/cancel/expire, borrower for repay) so the feed shows each action once.
+          const rawEvents = await db
             .select()
             .from(quotaEvents)
             .orderBy(desc(quotaEvents.createdAt))
-            .limit(50);
+            .limit(100);
+          const loanIds = [...new Set(rawEvents.map((e) => e.loanId).filter((id): id is string => !!id))];
+          const loanParties = loanIds.length
+            ? await db
+                .select({ id: loans.id, lenderOrgId: loans.lenderOrgId, borrowerOrgId: loans.borrowerOrgId })
+                .from(loans)
+                .where(inArray(loans.id, loanIds))
+            : [];
+          const partiesById = new Map(loanParties.map((l) => [l.id, l]));
+          const dbEvents = rawEvents
+            .filter((e) => {
+              const loan = e.loanId ? partiesById.get(e.loanId) : undefined;
+              if (!loan || !['LOAN_CREATE', 'LOAN_REPAY', 'LOAN_CANCEL', 'LOAN_EXPIRE'].includes(e.eventType)) return true;
+              const actor = e.eventType === 'LOAN_REPAY' ? loan.borrowerOrgId : loan.lenderOrgId;
+              return e.orgId === actor;
+            })
+            .slice(0, 50);
 
           eventsData = dbEvents.map((e) => ({
             id: e.id,
@@ -373,6 +407,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
             orgId: e.orgId,
             orgName: e.orgId === alpha.id ? alpha.name : beta.name,
             counterpartOrgId: e.counterpartOrgId,
+            loanId: e.loanId,
             amount: e.amount,
             balanceAfter: e.balanceAfter,
             idempotencyKey: e.idempotencyKey,
@@ -385,10 +420,16 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
       }
     }
 
+    let workersAlive = false;
+    if (isHealthy) {
+      workersAlive = Boolean(await redis.get('workers:heartbeat').catch(() => null));
+    }
+
     return reply.send({
       success: true,
       data: {
         system: health,
+        workers: { alive: workersAlive },
         degraded: !isHealthy,
         organizations: orgsData,
         loans: loansData,
@@ -428,7 +469,10 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     const message: string = err?.message || 'Unexpected error';
     let status = 500;
     let code = defaultCode;
-    if (err?.name === 'NotFoundError' || /not found/i.test(message)) {
+    if (err?.name === 'QuotaInUseError') {
+      status = 422;
+      code = 'QUOTA_IN_USE';
+    } else if (err?.name === 'NotFoundError' || /not found/i.test(message)) {
       status = 404;
       code = 'NOT_FOUND';
     } else if (err?.name === 'InsufficientQuotaError' || message === 'INSUFFICIENT_QUOTA') {
@@ -594,7 +638,7 @@ export const dashboardPlugin = fp(async (fastify: FastifyInstance) => {
     if (!chaosAllowed()) {
       return reply.status(403).send({
         success: false,
-        error: { code: 'CHAOS_DISABLED', message: 'Chaos drills are disabled in production' },
+        error: { code: 'CHAOS_DISABLED', message: 'Chaos drills are disabled' },
       });
     }
     const seconds = Math.min(120, Math.max(5, Math.floor(Number(req.body?.seconds) || 30)));

@@ -2,7 +2,9 @@ import { Worker, Queue } from 'bullmq';
 import Redis from 'ioredis';
 import pino from 'pino';
 import { db } from '../db';
-import { leases, quotaEvents } from '../db/schema';
+import { leases, quotaEvents, organizations } from '../db/schema';
+import { FastifyInstance } from 'fastify';
+import { enforceDeficit } from '../services/deficit.service';
 import { eq, and, lt, sql } from 'drizzle-orm';
 import { redis as defaultRedis } from '../redis';
 
@@ -17,6 +19,9 @@ export const startLeaseExpiryWorker = async () => {
   const leaseExpiryQueue = new Queue('lease-expiry', { connection: connection as any });
 
   const leaseExpiryWorker = new Worker('lease-expiry', async (job) => {
+  // Heartbeat: the dashboard shows a warning when no worker has run recently (job runs every 30s)
+  await defaultRedis.set('workers:heartbeat', Date.now().toString(), 'EX', 90);
+
   // 1. SELECT expired leases (status='active' AND expires_at < NOW()) LIMIT 100
   const expiredLeases = await db
     .select()
@@ -24,9 +29,6 @@ export const startLeaseExpiryWorker = async () => {
     .where(and(eq(leases.status, 'active'), lt(leases.expiresAt, sql`${new Date().toISOString()}::timestamptz`)))
     .limit(100);
 
-  if (expiredLeases.length === 0) {
-    return { processed: 0 };
-  }
 
   let processed = 0;
 
@@ -82,6 +84,20 @@ export const startLeaseExpiryWorker = async () => {
       processed++;
     } catch (err) {
       logger.error({ err, leaseId: lease.id }, 'Failed to process expired lease');
+    }
+  }
+
+  // Deficit enforcement: borrowers left below zero by a loan recall or expiry
+  const orgRows = await db.select({ id: organizations.id }).from(organizations);
+  const logFacade = { log: logger } as unknown as FastifyInstance;
+  for (const o of orgRows) {
+    try {
+      const r = await enforceDeficit(logFacade, o.id);
+      if (r.revokedLeaseIds.length > 0) {
+        logger.warn({ orgId: o.id, revoked: r.revokedLeaseIds, deficitLeft: r.deficit }, 'Revoked leases to cover a quota deficit');
+      }
+    } catch (err) {
+      logger.error({ err, orgId: o.id }, 'Deficit enforcement failed');
     }
   }
 
